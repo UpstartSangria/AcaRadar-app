@@ -13,9 +13,9 @@ task :default do
   puts `rake -T`
 end
 
-desc 'Run tests once'
-Rake::TestTask.new(:spec) do |t|
-  t.pattern = 'spec/**/*_spec.rb'
+desc 'Run acceptance tests only'
+Rake::TestTask.new(:spec_accept) do |t|
+  t.pattern = 'spec/tests/acceptance/*_spec.rb'
   t.warning = false
 end
 
@@ -27,57 +27,24 @@ task :new_session_secret do
   puts "SESSION_SECRET: #{secret}"
 end
 
-namespace :db do
-  task :config do
-    require 'sequel'
-    require_relative 'config/environment'
-    # require_relative 'spec/helpers/database_helper'
+desc 'Run the application (default: development mode)'
+task run: ['run:dev']
 
-    def app = AcaRadar::App
+namespace :run do
+  desc 'Run the application in development mode'
+  task :dev do
+    sh "rerun -c --ignore 'coverage/*' -- bundle exec puma -p 9000"
   end
 
-  desc 'Run migraiton'
-  task migrate: :config do
-    Sequel.extension :migration
-    puts "Migrating #{app.environment} database to latest"
-    Sequel::Migrator.run(app.db, 'db/migrations')
-  end
-
-  desc 'Wipe records from all tables'
-  task wipe: :config do
-    if app.environment == :production
-      puts 'Do not damage the production database!'
-      return
-    end
-
-    require_app(%w[models infrastructure])
-    DatabaseHelper.wipe_database
-  end
-
-  desc 'Delete dev or test database file (set correct RACK_ENV)'
-  task drop: :config do
-    if app.environment == :production
-      puts 'Do not damage production database!'
-      return
-    end
-
-    FileUtils.rm(AcaRadar::App.config.DB_FILENAME)
-    puts "Deleted #{AcaRadar::App.config.DB_FILENAME}"
+  desc 'Run the application in test mode'
+  task :test do
+    sh "rerun -c --ignore 'coverage/*' -- bundle exec puma -p 9000"
   end
 end
 
 desc 'Run application console'
 task :console do
   sh 'pry -r ./load_all'
-end
-
-namespace :vcr do
-  desc 'delete cassette fixtures'
-  task :wipe do
-    sh 'rm spec/fixtures/cassettes/*.yml' do |ok, _|
-      puts(ok ? 'Cassettes deleted' : 'No cassettes found')
-    end
-  end
 end
 
 namespace :quality do

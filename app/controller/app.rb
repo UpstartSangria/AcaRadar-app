@@ -2,12 +2,17 @@
 
 require 'roda'
 require 'slim'
-require 'uri'
-require 'rack'
+require 'http'
+require 'json'
+
+require_relative '../requests/research_interest'
+require_relative '../requests/list_paper'
+require_relative '../presentation/representers/papers_page_response'
+require_relative '../infrastructure/acaradar_api'
 
 # rubocop:disable Metrics/BlockLength
 module AcaRadar
-  # Web App
+  # Web App that consumes the AcaRadar API
   class App < Roda
     plugin :render, engine: 'slim', views: 'app/presentation/views_slim'
     plugin :assets, css: 'style.css', path: '/assets'
@@ -16,12 +21,8 @@ module AcaRadar
     plugin :halt
     plugin :all_verbs
     plugin :flash
-
-    MESSAGE = {
-      embed_research_interest_ok: 'Research interest is sucessfully embedded!',
-      refuse_same_journal: 'Please select 2 different journals',
-      api_error: 'arxiv API is not responsing, please visit the website later'
-    }.freeze
+    plugin :sessions,
+           secret: ENV.fetch('SESSION_SECRET', 'a_different_secret_for_the_web_app')
 
     route do |routing|
       routing.assets
@@ -29,77 +30,60 @@ module AcaRadar
 
       # GET /
       routing.root do
-        # display papers in previous session
-        session[:watching] ||= []
-        watched_papers = Repository::Paper.find_many_by_ids(session[:watching])
         journal_options = AcaRadar::View::JournalOption.new
+        watched_papers = []
+        view 'home', locals: { options: journal_options, watched_papers: watched_papers }
+      end
 
-        # research interest from user should be a single term
-        research_interest = routing.params['research_interest']&.strip
-        if research_interest
-          research_interest_form = AcaRadar::Form::ResearchInterest.new.call(single_term: research_interest)
-          if research_interest_form.failure?
-            flash[:error] = research_interest_form.errors[:single_term].first
+      routing.on 'research_interest' do
+        routing.post do
+          request = Request::ResearchInterest.new(routing.params)
+
+          unless request.valid?
+            flash[:error] = 'Research interest cannot be empty.'
             routing.redirect '/'
           end
 
-          embedded_research_interest = AcaRadar::Service::EmbedResearchInterest.new.call(research_interest_form.to_h)
-          if embedded_research_interest.failure?
-            flash[:error] = embedded_research_interest.failure
-            routing.redirect '/'
+          result = Api.embed_interest(request)
+
+          if result.success?
+            flash[:notice] = 'Research interest has been set!'
+          else
+            flash[:error] = result.message
           end
 
-          session[:research_interest_term] = research_interest
-          session[:research_interest_2d] = embedded_research_interest.value!
-          flash[:notice] = MESSAGE[:embed_research_interest_ok]
           routing.redirect '/'
         end
-
-        view 'home', locals: { watched_papers: watched_papers, options: journal_options }
       end
 
       # GET /selected_journals
       routing.on 'selected_journals' do
-        first_journal = routing.params['journal1']&.strip
-        second_journal = routing.params['journal2']&.strip
-        if first_journal == second_journal
-          flash[:notice] = MESSAGE[:refuse_same_journal]
+        request = Request::ListPapers.new(routing.params)
+
+        unless request.valid?
+          flash[:notice] = 'Please select 2 different journals.'
           routing.redirect '/'
         end
-        journals = [first_journal, second_journal].compact.reject(&:empty?)
 
-        begin
-          page = routing.params['page']&.to_i || 1
-          limit = 10
-          offset = (page - 1) * limit
+        result = Api.list_papers(request)
 
-          papers = Repository::Paper.find_by_categories(journals, limit: limit, offset: offset)
-          total_papers = Repository::Paper.count_by_categories(journals)
-
-          total_pages = (total_papers.to_f / limit).ceil
-          pagination = {
-            current: page,
-            total_pages: total_pages,
-            prev_page: page > 1 ? page - 1 : nil,
-            next_page: page < total_pages ? page + 1 : nil
-          }
-
-          session[:watching] |= papers.map(&:origin_id)
-
-          view 'selected_journals',
-               locals: { journals: journals, papers: papers.map do |p|
-                 AcaRadar::View::Paper.new(p)
-               end, total_papers: total_papers, pagination: pagination,
-                         error: nil,
-                         research_interest_term: session[:research_interest_term],
-                         research_interest_2d: session[:research_interest_2d] }
-        rescue StandardError => e
-          view 'selected_journals',
-               locals: { journals: journals, papers: [], total_papers: 0, pagination: {},
-                         error: "Failed to fetch arXiv data: #{e.message}",
-                         research_interest_term: session[:research_interest_term],
-                         research_interest_2d: session[:research_interest_2d] }
+        if result.failure?
+          flash[:error] = "API Error: #{result.message}"
+          routing.redirect '/'
         end
+
+        papers_page = Representer::PapersPageResponse.new(OpenStruct.new)
+                                                     .from_json(result.message)
+
+        view 'selected_journals',
+             locals: {
+               journals: papers_page.journals,
+               papers: papers_page.papers.map { |p| AcaRadar::View::Paper.new(p) },
+               research_interest_term: papers_page.research_interest_term,
+               research_interest_2d: papers_page.research_interest_2d,
+               pagination: {},
+               error: nil
+             }
       end
     end
   end
