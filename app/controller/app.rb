@@ -37,7 +37,7 @@ module AcaRadar
 
       routing.on 'research_interest' do
         routing.post do
-          request = Request::ResearchInterest.new(routing.params)
+          request = Request::EmbedResearchInterest.new(routing.params)
 
           unless request.valid?
             flash[:error] = 'Research interest cannot be empty.'
@@ -45,6 +45,7 @@ module AcaRadar
           end
 
           result = Api.embed_interest(request)
+          puts result.inspect
 
           if result.success?
             flash[:notice] = 'Research interest has been set!'

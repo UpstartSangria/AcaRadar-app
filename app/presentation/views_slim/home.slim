@@ -1,11 +1,13 @@
 .container-fluid
   hr.my-4
-  form role="form" action="/" method="get" id="research-interest-form"
+  form role="form" action="/research_interest" method="post" id="research-interest-form"
     .row.align-items-top
       .col-md-2
         .h4.mb-3.fw-bold Research Interest
       .col-md-8
-        input.form-control type="text" name="research_interest" id="research_interest_input" placeholder="Please enter your research interest"
+        input.form-control type="text" name="term" id="research_interest_input" placeholder="Please enter your research interest"
+        .progress.mt-2.d-none id="search-progress"
+          .progress-bar.progress-bar-striped.progress-bar-animated role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100" style="width: 75%;"
       .col-md-2
         button type="submit" id="embed-button" class="btn btn-primary w-100"
           span.spinner-grow.spinner-grow-sm.d-none role="status" aria-hidden="true"
@@ -47,6 +49,22 @@
       h4.alert-heading Welcome!
       p You haven't viewed any papers yet. Use the form above to find some interesting research.
   javascript:
+    // 1. Logic for Research Interest Form (Shows Progress Bar)
+    document.getElementById('research-interest-form').addEventListener('submit', function() {
+      const button = document.getElementById('embed-button');
+      const spinner = button.querySelector('.spinner-grow');
+      const buttonText = button.querySelector('.button-text');
+      const progressBar = document.getElementById('search-progress'); // Get the progress bar
+      
+      button.disabled = true;
+      spinner.classList.remove('d-none');
+      buttonText.textContent = '   Embedding...';
+      
+      // This line makes the progress bar visible
+      progressBar.classList.remove('d-none');
+    });
+
+    // 2. Logic for Find Journals Form
     document.getElementById('find-journals-form').addEventListener('submit', function() {
       const button = document.getElementById('find-button');
       const spinner = button.querySelector('.spinner-grow');
