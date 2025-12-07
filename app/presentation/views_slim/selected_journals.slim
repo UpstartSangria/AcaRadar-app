@@ -10,7 +10,7 @@ html lang='en'
       - if error
         .alert.alert-danger.show = error
       p You have selected the following journals: #{journals.inspect}
-      p We found: #{total_papers} papers in total
+      p We found #{papers.count} papers in total
       - if papers.any?
         - plot_data = []
         - ri_plot_data = research_interest_2d ? [{ x: research_interest_2d[0], y: research_interest_2d[1], label: research_interest_term }] : []

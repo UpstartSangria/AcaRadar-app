@@ -20,6 +20,7 @@ module AcaRadar
 
     def message
       return @custom_message if @custom_message
+      return @http_response.body.to_s if success?
 
       data = payload
       data['message'] || data['error'] || @http_response.reason
