@@ -14,6 +14,7 @@ require_relative '../infrastructure/acaradar_api'
 module AcaRadar
   # Web App that consumes the AcaRadar API
   class App < Roda
+    plugin :caching
     plugin :render, engine: 'slim', views: 'app/presentation/views_slim'
     plugin :assets, css: 'style.css', path: '/assets'
     plugin :static, ['/assets']
@@ -32,12 +33,13 @@ module AcaRadar
       routing.root do
         journal_options = AcaRadar::View::JournalOption.new
         watched_papers = []
+        response.expires 60, public: true
         view 'home', locals: { options: journal_options, watched_papers: watched_papers }
       end
 
       routing.on 'research_interest' do
         routing.post do
-          request = Request::ResearchInterest.new(routing.params)
+          request = Request::EmbedResearchInterest.new(routing.params)
 
           unless request.valid?
             flash[:error] = 'Research interest cannot be empty.'
@@ -66,6 +68,7 @@ module AcaRadar
         end
 
         result = Api.list_papers(request)
+        puts result
 
         if result.failure?
           flash[:error] = "API Error: #{result.message}"
@@ -74,7 +77,7 @@ module AcaRadar
 
         papers_page = Representer::PapersPageResponse.new(OpenStruct.new)
                                                      .from_json(result.message)
-
+        response.expires 60, public: true
         view 'selected_journals',
              locals: {
                journals: papers_page.journals,

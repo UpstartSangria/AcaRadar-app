@@ -2,6 +2,7 @@
 
 require 'roar/decorator'
 require 'roar/json'
+require 'ostruct'
 
 require_relative 'base'
 require_relative 'research_interest'
@@ -18,7 +19,10 @@ module AcaRadar
 
       property :journals, exec_context: :decorator
 
-      property :papers, decorator: Representer::PapersCollection, pass_options: true
+      property :papers,
+               decorator: Representer::PapersCollection,
+               pass_options: true,
+               class: OpenStruct
 
       property :pagination, exec_context: :decorator
 
@@ -26,8 +30,16 @@ module AcaRadar
         represented.journals
       end
 
+      def journals=(value)
+        represented.journals = value
+      end
+
       def pagination
         represented.papers.pagination
+      end
+
+      def pagination=(value)
+        represented.pagination = value
       end
     end
   end
