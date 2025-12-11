@@ -46,7 +46,7 @@ module AcaRadar
             routing.redirect '/'
           end
 
-          result = Api.embed_interest(request)
+          result = Service::EmbedResearchInterest.call(request)
 
           if result.success?
             flash[:notice] = 'Research interest has been set!'
@@ -67,7 +67,7 @@ module AcaRadar
           routing.redirect '/'
         end
 
-        result = Api.list_papers(request)
+        result = Service::ListPapers.call(request)
         puts result
 
         if result.failure?

@@ -8,16 +8,17 @@ module AcaRadar
     class EmbedResearchInterest
       include Dry::Monads::Result::Mixin
 
-      def call(input)
-        research_interest = input[:single_term]
-        begin
-          # Embed the research interest directly (as a single term)
-          embedding = Value::Embedding.embed_from(research_interest)
-          two_dim_embedding = Value::TwoDimEmbedding.reduce_dimension_from(embedding.full_embedding)
-          Success(two_dim_embedding.two_dim_embedding)
-        rescue StandardError => e
-          Failure("Failed to embed research interest: #{e.message}")
-        end
+      API_ROOT = ENV.fetch('API_URL', 'http://localhost:9292/api/v1')
+
+      def self.call(request)
+        data = { term: request.term }
+
+        response = HTTP.headers(content_type: 'application/json')
+                       .post("#{API_ROOT}/research_interest", json: data)
+
+        Response.new(response)
+      rescue HTTP::ConnectionError
+        Response.new(nil, error: true, message: 'Connection to API refused')
       end
     end
   end
