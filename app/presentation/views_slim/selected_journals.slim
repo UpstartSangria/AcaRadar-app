@@ -13,7 +13,7 @@ html lang='en'
       p We found #{papers.count} papers in total
       - if papers.any?
         - plot_data = []
-        - ri_plot_data = research_interest_2d ? [{ x: research_interest_2d[0], y: research_interest_2d[1], label: research_interest_term }] : []
+        - ri_plot_data = (research_interest_2d && research_interest_2d.size >= 2) ? [{ x: research_interest_2d[0], y: research_interest_2d[1], label: research_interest_term }] : []
         .table-responsive
           table.table.table-hover
             thead.table-active
@@ -37,6 +37,10 @@ html lang='en'
                   td = paper.concepts_list
                   td = paper.short_embedding
                   td = paper.two_dim_embedding
+
+        pre
+          | RI term: #{research_interest_term.inspect}
+          | \nRI 2D: #{research_interest_2d.inspect}
 
         h2.mt-4 Concept Visualization
         canvas#concept-chart data-paper-points=plot_data.to_json data-ri-points=ri_plot_data.to_json
@@ -118,7 +122,9 @@ html lang='en'
                 {
                   label: 'Research Interest',
                   data: riPoints,
-                  backgroundColor: 'rgb(255, 99, 132)'
+                  backgroundColor: 'rgb(255, 99, 132)',
+                  pointRadius: 7,
+                  pointHoverRadius: 10
                 }
               ]
             },

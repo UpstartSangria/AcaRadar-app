@@ -5,28 +5,23 @@ require 'roar/json'
 
 module AcaRadar
   module Representer
-    # class that represents a paper
     class Paper < Representer::Base
       property :origin_id
       property :title
-      property :summary, as: :abstract
+      property :abstract
       property :pdf_url
-      property :published_at, exec_context: :decorator
-      property :primary_category, as: :category
+      property :published_at
 
-      property :authors, exec_context: :decorator
+      # API sends a string
+      property :authors
 
-      property :similarity_score,
-               exec_context: :decorator,
-               render_nil: true
+      # API sends an array of strings
+      property :concepts
 
-      def published_at
-        represented.published_at.iso8601
-      end
+      # API sends {"x":..., "y":...} — keep as Hash
+      property :embedding_2d
 
-      def authors
-        represented.authors.join(', ')
-      end
+      property :similarity_score, render_nil: true
     end
   end
 end

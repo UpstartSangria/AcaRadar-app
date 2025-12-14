@@ -4,6 +4,7 @@ require 'roda'
 require 'slim'
 require 'http'
 require 'json'
+require 'ostruct'
 
 require_relative '../requests/research_interest'
 require_relative '../requests/list_paper'
@@ -49,6 +50,12 @@ module AcaRadar
           result = Service::EmbedResearchInterest.call(request)
 
           if result.success?
+            raw = JSON.parse(result.message) rescue {}
+            payload = (raw.is_a?(Hash) && raw.key?('data')) ? raw['data'] : raw
+
+            session[:research_interest_term] = payload['term'] || request.term
+            session[:research_interest_2d]   = normalize_vector_2d(payload['vector_2d'] || payload['research_interest_2d'])
+
             flash[:notice] = 'Research interest has been set!'
           else
             flash[:error] = result.message
@@ -68,26 +75,57 @@ module AcaRadar
         end
 
         result = Service::ListPapers.call(request)
-        puts result
 
         if result.failure?
           flash[:error] = "API Error: #{result.message}"
           routing.redirect '/'
         end
 
+        raw = JSON.parse(result.message) rescue {}
+        payload_hash = (raw.is_a?(Hash) && raw.key?('data')) ? raw['data'] : raw
+        payload_json = payload_hash.to_json
+
         papers_page = Representer::PapersPageResponse.new(OpenStruct.new)
-                                                     .from_json(result.message)
+                                                     .from_json(payload_json)
+
         response.expires 60, public: true
         view 'selected_journals',
              locals: {
-               journals: papers_page.journals,
-               papers: papers_page.papers.map { |p| AcaRadar::View::Paper.new(p) },
-               research_interest_term: papers_page.research_interest_term,
-               research_interest_2d: papers_page.research_interest_2d,
-               pagination: {},
+               journals: papers_page.journals || [],
+               papers: Array(papers_page.papers&.data).map { |p| AcaRadar::View::Paper.new(p) },
+               research_interest_term: session[:research_interest_term],
+               research_interest_2d: session[:research_interest_2d], # ALWAYS nil or [x,y]
+               pagination: papers_page.pagination || {},
                error: nil
              }
       end
+    end
+
+    private
+
+    # Normalizes API shapes into either nil or [x, y]
+    # Accepts:
+    #   {"x"=>0.1,"y"=>-0.2} OR {x:0.1,y:-0.2} OR [0.1,-0.2]
+    def normalize_vector_2d(v)
+      return nil if v.nil?
+
+      if v.is_a?(Hash)
+        x = v['x'] || v[:x]
+        y = v['y'] || v[:y]
+        return nil if x.nil? || y.nil?
+        return [x.to_f, y.to_f]
+      end
+
+      if v.is_a?(Array) && v.size >= 2
+        x = v[0]
+        y = v[1]
+        return nil if x.nil? || y.nil?
+        return [x.to_f, y.to_f]
+      end
+
+      nil
+    rescue StandardError
+      nil
     end
   end
 end

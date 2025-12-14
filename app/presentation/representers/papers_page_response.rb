@@ -5,42 +5,23 @@ require 'roar/json'
 require 'ostruct'
 
 require_relative 'base'
-require_relative 'research_interest'
 require_relative 'papers_collection'
 
 module AcaRadar
   module Representer
-    # class for response in each page of papers
     class PapersPageResponse < Representer::Base
       include Roar::JSON
 
       property :research_interest_term
       property :research_interest_2d
-
-      property :journals, exec_context: :decorator
+      property :journals
 
       property :papers,
                decorator: Representer::PapersCollection,
                pass_options: true,
                class: OpenStruct
 
-      property :pagination, exec_context: :decorator
-
-      def journals
-        represented.journals
-      end
-
-      def journals=(value)
-        represented.journals = value
-      end
-
-      def pagination
-        represented.papers.pagination
-      end
-
-      def pagination=(value)
-        represented.pagination = value
-      end
+      property :pagination
     end
   end
 end
