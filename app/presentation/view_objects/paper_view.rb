@@ -9,6 +9,10 @@ module AcaRadar
         @entity = entity
       end
 
+      def pdf_url
+        @entity.pdf_url
+      end
+
       def title
         @entity.title
       end
