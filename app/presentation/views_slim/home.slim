@@ -6,12 +6,21 @@
         .h4.mb-3.fw-bold Research Interest
       .col-md-8
         input.form-control type="text" name="term" id="research_interest_input" placeholder="Please enter your research interest"
-        .progress.mt-2.d-none id="search-progress"
-          .progress-bar.progress-bar-striped.progress-bar-animated role="progressbar" aria-valuenow="75" aria-valuemin="0" aria-valuemax="100" style="width: 75%;"
       .col-md-2
         button type="submit" id="embed-button" class="btn btn-primary w-100"
           span.spinner-grow.spinner-grow-sm.d-none role="status" aria-hidden="true"
           span.button-text Embed
+
+  .row.mt-3 id="embedding-progress-container" style="display: none;"
+    .col-md-12
+      .card.border-primary
+        .card-header.bg-primary.text-white
+          h5.mb-0 Embedding Progress
+        .card-body
+          .progress style="height: 30px;"
+            .progress-bar.progress-bar-striped.bg-info role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"
+              span#progress-text Processing...
+          p#status-text.mt-3.text-muted Current status: Waiting to start...
 
   hr.my-4
   form role="form" action="/selected_journals" method='GET' id='find-journals-form'
@@ -48,29 +57,72 @@
     .alert.alert-light role="alert"
       h4.alert-heading Welcome!
       p You haven't viewed any papers yet. Use the form above to find some interesting research.
-  javascript:
-    // 1. Logic for Research Interest Form (Shows Progress Bar)
-    document.getElementById('research-interest-form').addEventListener('submit', function() {
-      const button = document.getElementById('embed-button');
-      const spinner = button.querySelector('.spinner-grow');
-      const buttonText = button.querySelector('.button-text');
-      const progressBar = document.getElementById('search-progress'); // Get the progress bar
-      
-      button.disabled = true;
-      spinner.classList.remove('d-none');
-      buttonText.textContent = '   Embedding...';
-      
-      // This line makes the progress bar visible
-      progressBar.classList.remove('d-none');
-    });
 
-    // 2. Logic for Find Journals Form
-    document.getElementById('find-journals-form').addEventListener('submit', function() {
-      const button = document.getElementById('find-button');
-      const spinner = button.querySelector('.spinner-grow');
-      const buttonText = button.querySelector('.button-text');
-      
-      button.disabled = true;
-      spinner.classList.remove('d-none');
-      buttonText.textContent = '   Loading...';
+javascript:
+  document.getElementById('research-interest-form').addEventListener('submit', function() {
+    const button = document.getElementById('embed-button');
+    const spinner = button.querySelector('.spinner-grow');
+    const buttonText = button.querySelector('.button-text');
+    const container = document.getElementById('embedding-progress-container');
+
+    button.disabled = true;
+    spinner.classList.remove('d-none');
+    buttonText.textContent = '   Embedding...';
+    container.style.display = 'block';
+    document.getElementById('progress-text').textContent = 'Starting...';
+    document.getElementById('status-text').textContent = 'Current status: Processing...';
+  });
+
+  document.getElementById('find-journals-form').addEventListener('submit', function() {
+    const button = document.getElementById('find-button');
+    const spinner = button.querySelector('.spinner-grow');
+    const buttonText = button.querySelector('.button-text');
+
+    button.disabled = true;
+    spinner.classList.remove('d-none');
+    buttonText.textContent = '   Loading...';
+  });
+
+  const fayeClient = new Faye.Client('/faye');
+  let currentSubscription = null;
+
+  function subscribeToProgress(jobId) {
+    if (currentSubscription) currentSubscription.cancel();
+
+    const container = document.getElementById('embedding-progress-container');
+    container.style.display = 'block';
+
+    const progressBar = container.querySelector('.progress-bar');
+    const progressText = document.getElementById('progress-text');
+    const statusText = document.getElementById('status-text');
+
+    progressBar.style.width = '0%';
+    progressBar.setAttribute('aria-valuenow', 0);
+    progressText.textContent = 'Starting...';
+    statusText.textContent = 'Current status: Connecting...';
+
+    currentSubscription = fayeClient.subscribe(`/embedding_progress/${jobId}`, function(message) {
+      if (message.status) {
+        statusText.textContent = `Current status: ${message.status}`;
+        progressText.textContent = message.status;
+      }
+      if (message.progress !== undefined) {
+        progressBar.style.width = message.progress + '%';
+        progressBar.setAttribute('aria-valuenow', message.progress);
+      }
+      if (message.complete) {
+        progressText.textContent = 'Complete!';
+        progressBar.classList.replace('bg-info', 'bg-success');
+        setTimeout(() => container.style.display = 'none', 3000);
+      }
+      if (message.error) {
+        progressText.textContent = 'Error';
+        statusText.textContent = 'Error: ' + message.error;
+        progressBar.classList.add('bg-danger');
+      }
     });
+  }
+
+- if processing
+  javascript:
+    subscribeToProgress('#{processing.ws_channel_id}');

@@ -5,6 +5,7 @@ require 'roar/json'
 
 module AcaRadar
   module Representer
+    # class for representing paper
     class Paper < Representer::Base
       property :origin_id
       property :title

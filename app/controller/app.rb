@@ -4,7 +4,6 @@ require 'roda'
 require 'slim'
 require 'http'
 require 'json'
-require 'ostruct'
 
 require_relative '../requests/research_interest'
 require_relative '../requests/list_paper'
@@ -29,13 +28,19 @@ module AcaRadar
     route do |routing|
       routing.assets
       response['Content-Type'] = 'text/html; charset=utf-8'
+      processing_data = session.delete(:processing_job) # Read and clear the session key
+      processing = nil
 
       # GET /
       routing.root do
+        if processing_data
+          processing = View::EmbeddingProcessing.new(App.config, processing_data)
+          puts processing
+        end
         journal_options = AcaRadar::View::JournalOption.new
         watched_papers = []
         response.expires 60, public: true
-        view 'home', locals: { options: journal_options, watched_papers: watched_papers }
+        view 'home', locals: { options: journal_options, watched_papers: watched_papers, processing: processing }
       end
 
       routing.on 'research_interest' do
@@ -50,16 +55,15 @@ module AcaRadar
           result = Service::EmbedResearchInterest.call(request)
 
           if result.success?
-            raw = JSON.parse(result.message) rescue {}
-            payload = (raw.is_a?(Hash) && raw.key?('data')) ? raw['data'] : raw
-
-            session[:research_interest_term] = payload['term'] || request.term
-            session[:research_interest_2d]   = normalize_vector_2d(payload['vector_2d'] || payload['research_interest_2d'])
-
             flash[:notice] = 'Research interest has been set!'
           else
             flash[:error] = result.message
           end
+
+          api_response = JSON.parse(result.message)
+          session[:processing_job] = api_response
+          puts api_response
+          puts(session[:processing_job])
 
           routing.redirect '/'
         end
@@ -75,57 +79,26 @@ module AcaRadar
         end
 
         result = Service::ListPapers.call(request)
+        puts result
 
         if result.failure?
           flash[:error] = "API Error: #{result.message}"
           routing.redirect '/'
         end
 
-        raw = JSON.parse(result.message) rescue {}
-        payload_hash = (raw.is_a?(Hash) && raw.key?('data')) ? raw['data'] : raw
-        payload_json = payload_hash.to_json
-
         papers_page = Representer::PapersPageResponse.new(OpenStruct.new)
-                                                     .from_json(payload_json)
-
+                                                     .from_json(result.message)
         response.expires 60, public: true
         view 'selected_journals',
              locals: {
-               journals: papers_page.journals || [],
-               papers: Array(papers_page.papers&.data).map { |p| AcaRadar::View::Paper.new(p) },
-               research_interest_term: session[:research_interest_term],
-               research_interest_2d: session[:research_interest_2d], # ALWAYS nil or [x,y]
-               pagination: papers_page.pagination || {},
+               journals: papers_page.journals,
+               papers: papers_page.papers.map { |p| AcaRadar::View::Paper.new(p) },
+               research_interest_term: papers_page.research_interest_term,
+               research_interest_2d: papers_page.research_interest_2d,
+               pagination: {},
                error: nil
              }
       end
-    end
-
-    private
-
-    # Normalizes API shapes into either nil or [x, y]
-    # Accepts:
-    #   {"x"=>0.1,"y"=>-0.2} OR {x:0.1,y:-0.2} OR [0.1,-0.2]
-    def normalize_vector_2d(v)
-      return nil if v.nil?
-
-      if v.is_a?(Hash)
-        x = v['x'] || v[:x]
-        y = v['y'] || v[:y]
-        return nil if x.nil? || y.nil?
-        return [x.to_f, y.to_f]
-      end
-
-      if v.is_a?(Array) && v.size >= 2
-        x = v[0]
-        y = v[1]
-        return nil if x.nil? || y.nil?
-        return [x.to_f, y.to_f]
-      end
-
-      nil
-    rescue StandardError
-      nil
     end
   end
 end

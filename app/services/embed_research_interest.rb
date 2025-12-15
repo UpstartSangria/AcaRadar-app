@@ -14,7 +14,7 @@ module AcaRadar
         data = { term: request.term }
 
         response = HTTP.headers(content_type: 'application/json')
-                       .post("#{API_ROOT}/research_interest", json: data)
+                       .post("#{API_ROOT}/research_interest/async", json: data)
 
         Response.new(response)
       rescue HTTP::ConnectionError
