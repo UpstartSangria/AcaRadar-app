@@ -1,8 +1,10 @@
 header 
   script src="/faye/client.js" type="text/javascript"
+
 .container-fluid
   hr.my-4
-  form role="form" action="/research_interest" method="post" id="research-interest-form"
+  / CHANGED: Removed action and method. The ID allows JS to take over.
+  form id="research-interest-form"
     .row.align-items-top
       .col-md-2
         .h4.mb-3.fw-bold Research Interest
@@ -26,7 +28,6 @@ header
 
   hr.my-4
   form role="form" action="/selected_journals" method='GET' id='find-journals-form'
-    / 'align-items-top' vertically aligns the items to their top edge.
     .row.align-items-top
       .col-md-2
         .h4.mb-3.fw-bold Select Journals
@@ -61,33 +62,10 @@ header
       p You haven't viewed any papers yet. Use the form above to find some interesting research.
 
 javascript:
-  document.getElementById('research-interest-form').addEventListener('submit', function() {
-    const button = document.getElementById('embed-button');
-    const spinner = button.querySelector('.spinner-grow');
-    const buttonText = button.querySelector('.button-text');
-    const container = document.getElementById('embedding-progress-container');
-
-    button.disabled = true;
-    spinner.classList.remove('d-none');
-    buttonText.textContent = '   Embedding...';
-    container.style.display = 'block';
-    document.getElementById('progress-text').textContent = 'Starting...';
-    document.getElementById('status-text').textContent = 'Current status: Processing...';
-  });
-
-  document.getElementById('find-journals-form').addEventListener('submit', function() {
-    const button = document.getElementById('find-button');
-    const spinner = button.querySelector('.spinner-grow');
-    const buttonText = button.querySelector('.button-text');
-
-    button.disabled = true;
-    spinner.classList.remove('d-none');
-    buttonText.textContent = '   Loading...';
-  });
-
   const fayeClient = new Faye.Client('/faye');
   let currentSubscription = null;
 
+  // 1. Logic to handle the subscription and UI updates
   function subscribeToProgress(jobId) {
     if (currentSubscription) currentSubscription.cancel();
 
@@ -103,28 +81,89 @@ javascript:
     progressText.textContent = 'Starting...';
     statusText.textContent = 'Current status: Connecting...';
 
+    // NOTE: This channel name '/embedding_progress/...' must match your Backend Logic exactly
     currentSubscription = fayeClient.subscribe(`/embedding_progress/${jobId}`, function(message) {
+      console.log("Faye received:", message);
+      
       if (message.status) {
         statusText.textContent = `Current status: ${message.status}`;
-        progressText.textContent = message.status;
       }
-      if (message.progress !== undefined) {
-        progressBar.style.width = message.progress + '%';
-        progressBar.setAttribute('aria-valuenow', message.progress);
-      }
-      if (message.complete) {
-        progressText.textContent = 'Complete!';
-        progressBar.classList.replace('bg-info', 'bg-success');
-        setTimeout(() => container.style.display = 'none', 3000);
-      }
-      if (message.error) {
-        progressText.textContent = 'Error';
-        statusText.textContent = 'Error: ' + message.error;
-        progressBar.classList.add('bg-danger');
+      
+      if (message.percent !== undefined) {
+        progressBar.style.width = message.percent + '%';
+        progressBar.setAttribute('aria-valuenow', message.percent);
+        progressText.textContent = message.percent + '%';
+        
+        // When complete (100%), reload the page to see results
+        if (message.percent >= 100) {
+           progressBar.classList.replace('bg-info', 'bg-success');
+           progressText.textContent = 'Complete!';
+           statusText.textContent = 'Done! Reloading...';
+           
+           setTimeout(() => {
+             window.location = '/'; // Reload page to show new papers
+           }, 1000);
+        }
       }
     });
   }
 
-- if processing
-  javascript:
-    subscribeToProgress('#{processing.ws_channel_id}');
+  // 2. The Form Submit Listener
+  document.getElementById('research-interest-form').addEventListener('submit', async function(e) {
+    e.preventDefault(); // STOP the default form POST (prevents 302 redirect)
+
+    const button = document.getElementById('embed-button');
+    const spinner = button.querySelector('.spinner-grow');
+    const buttonText = button.querySelector('.button-text');
+    const inputTerm = document.getElementById('research_interest_input').value;
+
+    // UI Updates
+    button.disabled = true;
+    spinner.classList.remove('d-none');
+    buttonText.textContent = '   Requesting...';
+
+    try {
+      // Perform the AJAX request to your API
+      const response = await fetch('/api/v1/research_interest/async', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ term: inputTerm })
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // Assuming structure: { data: { job_id: '123' } } or { job_id: '123' }
+        // Adjust .data.job_id based on your actual StandardResponse format
+        const jobId = result.data.job_id; 
+        
+        console.log("Job started with ID:", jobId);
+        buttonText.textContent = '   Processing...';
+        
+        // Start listening to Faye
+        subscribeToProgress(jobId);
+      } else {
+        console.error("API Error");
+        button.disabled = false;
+        buttonText.textContent = 'Embed';
+        spinner.classList.add('d-none');
+        alert("Failed to start embedding job.");
+      }
+    } catch (error) {
+      console.error(error);
+      button.disabled = false;
+      buttonText.textContent = 'Embed';
+      spinner.classList.add('d-none');
+    }
+  });
+
+  document.getElementById('find-journals-form').addEventListener('submit', function() {
+    const button = document.getElementById('find-button');
+    const spinner = button.querySelector('.spinner-grow');
+    const buttonText = button.querySelector('.button-text');
+
+    button.disabled = true;
+    spinner.classList.remove('d-none');
+    buttonText.textContent = '   Loading...';
+  });
