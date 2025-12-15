@@ -69,3 +69,6 @@ gem 'tactful_tokenizer'
 gem 'multi_json'
 gem 'ostruct'
 gem 'roar'
+
+# Worker
+gem 'faye'
