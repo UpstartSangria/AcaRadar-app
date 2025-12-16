@@ -1,6 +1,7 @@
+script src="http://localhost:9292/faye/client.js"
 .container-fluid
   hr.my-4
-  form role="form" action="/research_interest" method="post" id="research-interest-form"
+  form role="form" id="research-interest-form"
     .row.align-items-top
       .col-md-2
         .h4.mb-3.fw-bold Research Interest
@@ -49,28 +50,130 @@
       h4.alert-heading Welcome!
       p You haven't viewed any papers yet. Use the form above to find some interesting research.
   javascript:
-    // 1. Logic for Research Interest Form (Shows Progress Bar)
-    document.getElementById('research-interest-form').addEventListener('submit', function() {
-      const button = document.getElementById('embed-button');
-      const spinner = button.querySelector('.spinner-grow');
-      const buttonText = button.querySelector('.button-text');
-      const progressBar = document.getElementById('search-progress'); // Get the progress bar
-      
-      button.disabled = true;
-      spinner.classList.remove('d-none');
-      buttonText.textContent = '   Embedding...';
-      
-      // This line makes the progress bar visible
-      progressBar.classList.remove('d-none');
-    });
+    document.addEventListener("DOMContentLoaded", function() {
 
-    // 2. Logic for Find Journals Form
-    document.getElementById('find-journals-form').addEventListener('submit', function() {
-      const button = document.getElementById('find-button');
-      const spinner = button.querySelector('.spinner-grow');
-      const buttonText = button.querySelector('.button-text');
-      
-      button.disabled = true;
-      spinner.classList.remove('d-none');
-      buttonText.textContent = '   Loading...';
-    });
+      // ==========================================
+      // 1. Research Interest Form (AJAX + Faye)
+      // ==========================================
+      const researchForm = document.getElementById('research-interest-form');
+      const progressBarContainer = document.getElementById('search-progress');
+      const progressBar = progressBarContainer ? progressBarContainer.querySelector('.progress-bar') : null;
+      const embedButton = document.getElementById('embed-button');
+
+      // Safety Check
+      if (researchForm) {
+        researchForm.addEventListener('submit', async function(e) {
+          e.preventDefault(); // Stop page reload
+
+          const termInput = document.getElementById('research_interest_input').value;
+          console.log("1. [Frontend] Form submitted. Term:", termInput);
+
+          // --- A. RESET UI ---
+          embedButton.disabled = true;
+          embedButton.querySelector('.button-text').innerText = "Starting...";
+          
+          // Reset and show progress bar
+          progressBarContainer.classList.remove('d-none');
+          if(progressBar) {
+              progressBar.style.width = '0%';
+              progressBar.setAttribute('aria-valuenow', 0);
+              progressBar.innerText = '0%';
+              progressBar.classList.add('progress-bar-animated'); // Start animation
+          }
+
+          try {
+            // --- B. CALL API (Port 9292) ---
+            console.log("2. [Frontend] Sending POST request to Port 9292...");
+            
+            const response = await fetch('http://localhost:9292/api/v1/research_interest', {
+              method: 'POST',
+              headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json' 
+              },
+              body: JSON.stringify({ term: termInput })
+            });
+
+            if (!response.ok) {
+              throw new Error(`Server Error: ${response.status} ${response.statusText}`);
+            }
+
+            const result = await response.json();
+            console.log("3. [Frontend] API Response received:", result);
+
+            // --- C. GET REQUEST ID ---
+            // Based on your logs, the structure is inside result.data.request_id
+            const requestId = result.data ? result.data.request_id : null;
+            
+            if (!requestId) {
+              throw new Error("Response did not contain a request_id in result.data");
+            }
+
+            console.log("4. [Frontend] Request ID obtained:", requestId);
+            embedButton.querySelector('.button-text').innerText = "Processing...";
+
+            // --- D. SUBSCRIBE TO FAYE ---
+            // Ensure we point to port 9292
+            const client = new Faye.Client('http://localhost:9292/faye');
+            
+            console.log(`5. [Faye] Subscribing to channel: /${requestId}`);
+
+            const subscription = client.subscribe('/' + requestId, function(message) {
+              console.log("6. [Faye] Message Received:", message);
+
+              // Expecting message format: { percent: 50, status: '...' }
+              if (progressBar && message.percent !== undefined) {
+                  const percentVal = message.percent;
+                  progressBar.style.width = percentVal + '%';
+                  progressBar.setAttribute('aria-valuenow', percentVal);
+                  progressBar.innerText = percentVal + '%';
+              }
+
+              // Check for Completion
+              if (message.percent >= 100) {
+                  console.log("7. [Faye] Job Complete!");
+                  
+                  // Final UI Updates
+                  progressBar.classList.remove('progress-bar-animated'); // Stop animation
+                  embedButton.disabled = false;
+                  embedButton.querySelector('.button-text').innerText = "Done";
+                  
+                  // Optional: Unsubscribe to stop listening
+                  // subscription.cancel();
+              }
+            });
+            
+            // Debugging Faye connection
+            subscription.then(function() {
+              console.log("5b. [Faye] Subscription active/successful.");
+            });
+
+          } catch (error) {
+            console.error("!!! [Frontend] Error:", error);
+            alert("An error occurred: " + error.message);
+            
+            // Reset button so user can try again
+            embedButton.disabled = false;
+            embedButton.querySelector('.button-text').innerText = "Embed";
+          }
+        });
+      } else {
+        console.warn("Could not find element #research-interest-form");
+      }
+
+      // ==========================================
+      // 2. Find Journals Form (Existing Logic)
+      // ==========================================
+      const journalsForm = document.getElementById('find-journals-form');
+      if (journalsForm) {
+        journalsForm.addEventListener('submit', function() {
+          const button = document.getElementById('find-button');
+          const spinner = button.querySelector('.spinner-grow');
+          const buttonText = button.querySelector('.button-text');
+          
+          button.disabled = true;
+          spinner.classList.remove('d-none');
+          buttonText.textContent = '   Loading...';
+        });
+      }
+      });
