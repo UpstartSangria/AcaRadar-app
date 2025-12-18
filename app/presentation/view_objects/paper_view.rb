@@ -26,7 +26,7 @@ module AcaRadar
 
       def authors_list
         a = @entity.authors
-        return '' if a.nil? || a.to_s.strip.empty?
+        return 'No Authors Found' if a.nil? || a.to_s.strip.empty?
         return a if a.is_a?(String)
 
         Array(a).join(', ')

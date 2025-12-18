@@ -24,16 +24,17 @@ html
       crossorigin="anonymous"
     }
 
-    nav.navbar.navbar-expand-lg.bg-light 
+    nav.navbar.navbar-expand-lg.bg-light
       .container-fluid
-        a.navbar-brand href="/" style="font-size: 3rem; font-weight: bold;"
-          img.me-2 src="/assets/acaradar_logo-removebg.png" height="70"
+        a.navbar-brand href="/" style="font-size: 2rem; font-weight: bold;"
+          img.me-2 src="/assets/acaradar_logo-removebg.png" height="50"
           | AcaRadar
+
     .container id='html_body'
-    hr.my-4
+      hr.my-1
       section
         == render('flash_bar')
         == yield
 
-      footer.mt-auto.py-5
+      footer.mt-auto.py-5.px-3
         = "AcaRadar is made for demonstration purposes. We cannot warrant full correctness of all content. AcaRadar may use cookies for sessions but does not track users."

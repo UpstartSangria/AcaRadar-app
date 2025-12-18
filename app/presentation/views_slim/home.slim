@@ -16,9 +16,9 @@ script src="http://localhost:9292/faye/client.js"
 .container-fluid
   hr.my-4
   form role="form" id="research-interest-form"
-    .row.align-items-top
-      .col-md-2
-        .h4.mb-3.fw-bold Research Interest
+    .row.align-items-center
+      .col-md-2.d-flex.align-items-center
+        .h4.mb-0.fw-bold Research Interest
       .col-md-8
         input.form-control type="text" name="term" id="research_interest_input" placeholder="Please enter your research interest"
         .progress.mt-2.d-none id="search-progress"
@@ -30,10 +30,9 @@ script src="http://localhost:9292/faye/client.js"
 
   hr.my-4
   form role="form" action="/selected_journals" method='GET' id='find-journals-form'
-    / 'align-items-top' vertically aligns the items to their top edge.
-    .row.align-items-top
-      .col-md-2
-        .h4.mb-3.fw-bold Select Journals
+    .row.align-items-center
+      .col-md-2.d-flex.align-items-center
+        .h4.mb-0.fw-bold Select Journals
       .col-md-4
         select name='journal1' id='journal_select1' class="form-control"
           - AcaRadar::View::JournalOption.all.each do |text, value|
@@ -43,7 +42,7 @@ script src="http://localhost:9292/faye/client.js"
           - AcaRadar::View::JournalOption.all.each do |text, value|
             option value=value = text
       .col-md-2
-        button type='submit' id='find-button' class="btn btn-primary w-100" 
+        button type='submit' id='find-button' class="btn btn-primary w-100"
           span.spinner-grow.spinner-grow-sm.d-none role="status" aria-hidden="true"
           span.button-text Find
   hr.my-4
@@ -58,11 +57,11 @@ script src="http://localhost:9292/faye/client.js"
             | Published on: #{paper.published}
           p.card-text
             = paper.summary
-
   - else
     .alert.alert-light role="alert"
       h4.alert-heading Welcome!
-      p You haven't viewed any papers yet. Use the form above to find some interesting research.
+      p You haven't viewed any papers yet. Use the form above to find some interesting research papers.
+
   javascript:
     const API_HOST = "#{@api_host}";
     console.log("0. [Frontend] API defined:", API_HOST);

@@ -1,163 +1,301 @@
 doctype html
-html lang='en'
+html lang="en"
   head
-    meta charset='utf-8'
-    meta name='viewport' content='width=device-width, initial-scale=1'
+    meta charset="utf-8"
+    meta name="viewport" content="width=device-width, initial-scale=1"
     title Selected Journals - AcaRadar
+
     script src="https://cdn.jsdelivr.net/npm/chart.js"
     script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+
+    css:
+      .chart-container {
+        height: 57.25vh;
+        max-height: 57.25vh;
+        width: 75%;
+        position: relative;
+        margin: 0 auto;
+      }
+
+      #concept-chart {
+        width: 100% !important;
+        height: 100% !important;
+        display: block;
+      }
+
   body
     .container-fluid.mt-4
       - if error
         .alert.alert-danger.show = error
-      h4.mt-4 You have selected the following journals: #{journals.inspect}. We found #{papers.count} papers in total!
+
+      p.mt-4
+        | Found #{papers.count} papers in total!
+
       - if papers.any?
         - plot_data = []
         - ri_plot_data = (research_interest_2d && research_interest_2d.size >= 2) ? [{ x: research_interest_2d[0], y: research_interest_2d[1], label: research_interest_term }] : []
+
+        - papers.each do |paper|
+          - plot_data << {x: paper.two_dim_embedding[0], y: paper.two_dim_embedding[1], label: paper.title, pdfUrl: paper.pdf_url, published: paper.published, authors: paper.authors_list, summary: paper.short_summary}
+
+        h3.mt-3 Concept Visualization
+        .chart-container
+          canvas#concept-chart data-paper-points=plot_data.to_json data-ri-points=ri_plot_data.to_json
+
+        h3.mt-4 Selected Paper
+        #hoverPaper.border.rounded.p-3.mb-4
+          h5#hoverTitle.mb-1.text-break Hover a paper dot to see details
+          .text-muted.small#hoverPublished
+          .mt-3#hoverAuthors
+          .mt-3#hoverSummary
+          .mt-3
+            a#hoverPdf href="#" target="_blank" rel="noopener" Open PDF
+
         h3.mt-4 Papers
         #papersAccordion.accordion.mb-4
           - papers.each_with_index do |paper, index|
-            - plot_data << { x: paper.two_dim_embedding[0], y: paper.two_dim_embedding[1], label: paper.title, pdfUrl: paper.pdf_url }
             .accordion-item
               h2.accordion-header id="heading-#{index}"
-                button.accordion-button.collapsed type="button" data-bs-toggle="collapse" data-bs-target="#collapse-#{index}" aria-expanded="false" aria-controls="collapse-#{index}"
+                button.accordion-button.collapsed type="button" data-bs-toggle="collapse" data-bs-target="#collapse-#{index}"
                   = paper.title
-              .accordion-collapse.collapse id="collapse-#{index}" aria-labelledby="heading-#{index}" data-bs-parent="#papersAccordion"
+              .accordion-collapse.collapse id="collapse-#{index}" data-bs-parent="#papersAccordion"
                 .accordion-body
-                  h6.card-subtitle.mb-2.text-muted Published: #{paper.published}
-                  p.card-text.mt-3 = paper.short_summary
-                  p.card-text.mt-3 = paper.pdf_url
-                  hr
-                  h6 Concepts:
-                  ul.list-group.list-group-flush
-                    - paper.concepts_list.to_s.split(',').each do |concept|
-                      li.list-group-item = concept.strip
-                  .mt-3
-                    small.text-muted
-
-        h3.mt-4 Concept Visualization
-        p Research Interest term: #{research_interest_term.inspect}
-        p Reseatch Interest 2D: #{research_interest_2d.inspect}
-        canvas#concept-chart data-paper-points=plot_data.to_json data-ri-points=ri_plot_data.to_json
+                  h6.text-muted Published: #{paper.published}
+                  p.mt-3 = paper.authors_list
+                  p.mt-3 = paper.short_summary
+                  p.mt-3 
+                    a href=paper.pdf_url target="_blank" rel="noopener" Open PDF
       - else
         p No papers found.
+
+
+
     javascript:
       document.addEventListener('DOMContentLoaded', () => {
-        const canvas = document.getElementById('concept-chart');
-        if (canvas) {
-          // 1. Get the data from our data-points attribute
-          const paperPointsJSON = canvas.dataset.paperPoints;
-          const riPointsJSON = canvas.dataset.riPoints;
-          const paperPoints = JSON.parse(paperPointsJSON);
-          const riPoints = JSON.parse(riPointsJSON);
-          // 2. Define our custom plugin to draw the circle on hover
-          const hoverCirclePlugin = {
-            id: 'hoverCircle',
-            // We use afterEvent to track the mouse position and see what it's hovering over
-            afterEvent: (chart, args, options) => {
-              const event = args.event;
+        const el = document.getElementById('concept-chart');
+        if (!el || typeof Chart === 'undefined') return;
 
-              if (event.type === 'mousemove') {
-                const activeElements = chart.getActiveElements();
-                if (activeElements.length > 0) {
-                  // Store the hovered element's info for the drawing phase
-                  chart.hoveredElement = activeElements[0];
-                } else {
-                  chart.hoveredElement = null;
-                }
-                // Redraw the chart to show/hide the circle
-                chart.draw();
-              } else if (event.type === 'mouseout') {
-                chart.hoveredElement = null;
-                chart.draw();
-              }
+        const papers = (() => { try { return JSON.parse(el.dataset.paperPoints || '[]'); } catch { return []; } })();
+        const ri = (() => { try { return JSON.parse(el.dataset.riPoints || '[]'); } catch { return []; } })();
+
+        const hoverTitle = document.getElementById('hoverTitle');
+        const hoverPublished = document.getElementById('hoverPublished');
+        const hoverAuthors = document.getElementById('hoverAuthors');
+        const hoverSummary = document.getElementById('hoverSummary');
+        const hoverPdf = document.getElementById('hoverPdf');
+
+        let hoverIdx = null;
+
+        function renderHover(p) {
+          if (!hoverTitle) return;
+
+          if (!p) {
+            hoverTitle.textContent = 'Hover a paper dot to see details';
+            if (hoverPublished) hoverPublished.textContent = '';
+            if (hoverAuthors) hoverAuthors.textContent = '';
+            if (hoverSummary) hoverSummary.textContent = '';
+            if (hoverPdf) hoverPdf.href = '#';
+            return;
+          }
+
+          hoverTitle.textContent = p.label || '';
+          if (hoverPublished) hoverPublished.textContent = p.published ? `Published: ${p.published}` : '';
+          if (hoverAuthors) hoverAuthors.textContent = p.authors || '';
+          if (hoverSummary) hoverSummary.textContent = p.summary || '';
+          if (hoverPdf) hoverPdf.href = p.pdfUrl || '#';
+        }
+
+        renderHover(null);
+
+
+
+        const center = ri[0] ? { x: ri[0].x, y: ri[0].y } : (() => {
+          if (!papers.length) return { x: 0, y: 0 };
+          let sx = 0, sy = 0; for (const p of papers) { sx += p.x; sy += p.y; }
+          return { x: sx / papers.length, y: sy / papers.length };
+        })();
+
+        const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+        let maxD = 1; for (const p of papers) maxD = Math.max(maxD, dist(p, center));
+        const range = maxD * 1.1;
+
+        // nearest paper by Euclidean distance to RI/center (data space)
+        let nearest = -1, best = Infinity;
+        for (let i = 0; i < papers.length; i++) {
+          const d = dist(papers[i], center);
+          if (d < best) { best = d; nearest = i; }
+        }
+
+        // size scaling
+        const maxR = 12, minR = 3;
+        const rFor = (p) => maxR - Math.min(1, dist(p, center) / maxD) * (maxR - minR);
+
+        // paint levels (0..1)
+        const paint = new Float32Array(papers.length);
+
+        // animation params
+        const TWO_PI = Math.PI * 2;
+        const W = Math.PI / 6;     // sweep width
+        const SPEED = 1.8;         // rad/sec
+        const FADE = 2.2;          // level/sec
+
+        const norm = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
+        const inWedge = (a, s, e) => (s <= e) ? (a >= s && a <= e) : (a >= s || a <= e);
+        const anyPaint = () => { for (let i = 0; i < paint.length; i++) if (paint[i] > 0.001) return true; return false; };
+        const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+        let raf = null, last = 0;
+
+        const sweepPlugin = {
+          id: 'radarSweep',
+          afterDatasetsDraw(chart) {
+            if (!chart._radar) return;
+            const m = chart.getDatasetMeta(1);
+            if (!m?.data?.[0]) return;
+
+            const ctx = chart.ctx, a = chart.chartArea;
+            const { x: cx, y: cy } = m.data[0].getProps(['x', 'y'], true);
+            const R = Math.max(cx - a.left, a.right - cx, cy - a.top, a.bottom - cy);
+            const s = chart._ang || 0, e = s + W;
+
+            ctx.save();
+            ctx.beginPath(); ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top); ctx.clip();
+
+            const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+            g.addColorStop(0, 'rgba(0,255,102,0.25)');
+            g.addColorStop(1, 'rgba(0,255,102,0)');
+
+            ctx.globalAlpha = 0.6;
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, s, e); ctx.closePath(); ctx.fill();
+
+            ctx.globalAlpha = 0.45;
+            ctx.strokeStyle = 'rgba(0,255,102,0.9)';
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(e) * R, cy + Math.sin(e) * R); ctx.stroke();
+
+            ctx.restore();
+          }
+        };
+
+        const paintPlugin = {
+          id: 'paintOverlay',
+          afterDatasetsDraw(chart) {
+            if (!anyPaint()) return;
+            const meta = chart.getDatasetMeta(0), pts = meta?.data || [];
+            if (!pts.length) return;
+
+            const ctx = chart.ctx, a = chart.chartArea;
+            ctx.save();
+            ctx.beginPath(); ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top); ctx.clip();
+
+            for (let i = 0; i < pts.length; i++) {
+              const lv = paint[i];
+              if (lv <= 0.001) continue;
+
+              const { x, y } = pts[i].getProps(['x', 'y'], true);
+              const rad = (pts[i].options && typeof pts[i].options.radius === 'number') ? pts[i].options.radius : 4;
+              const isGold = (i === nearest);
+              const rgb = isGold ? '255,215,0' : '0,255,102';
+
+              ctx.globalAlpha = 0.15 + 0.85 * clamp01(lv);
+              ctx.fillStyle = `rgb(${rgb})`;
+              ctx.beginPath(); ctx.arc(x, y, rad, 0, TWO_PI); ctx.fill();
+
+              ctx.globalAlpha = 0.25 + 0.75 * clamp01(lv);
+              ctx.strokeStyle = `rgb(${rgb})`;
+              ctx.lineWidth = 2;
+              ctx.beginPath(); ctx.arc(x, y, rad + 0.5, 0, TWO_PI); ctx.stroke();
+            }
+
+            ctx.restore();
+          }
+        };
+
+        const chart = new Chart(el, {
+          type: 'scatter',
+          data: {
+            datasets: [
+              { label: 'Papers', data: papers, pointRadius: (c) => rFor(c.raw), pointHoverRadius: (c) => rFor(c.raw) + 2, pointBorderWidth: 1 },
+              { label: 'Research Interest', data: ri, pointRadius: 14, pointHoverRadius: 18 }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'nearest', intersect: true },
+            scales: {
+              x: { min: center.x - range, max: center.x + range, grid: { display: false } },
+              y: { min: center.y - range, max: center.y + range, grid: { display: false } }
             },
-            // afterDatasetsDraw allows us to draw on top of the chart datasets
-            afterDatasetsDraw: (chart, args, options) => {
-              const { ctx } = chart;
-              const hoveredElement = chart.hoveredElement;
-              if (hoveredElement) {
-                ctx.save();
+            onHover: (evt, els) => {
+              const c = evt?.chart?.canvas; if (!c) return;
+              const h = els?.[0];
+              const ds = h?.datasetIndex;
+              const idx = h?.index;
 
-                // Get the pixel coordinates of the hovered point
-                const x = hoveredElement.element.x;
-                const y = hoveredElement.element.y;
+              // cursor
+              c.style.cursor = (ds === 0) ? 'pointer' : 'default';
 
-                // Use a fixed pixel radius for visibility (adjust as needed)
-                const pixelRadius = 400;
+              // Hovered Paper sticks: only update when hovering a *paper* point
+              if (ds === 0 && Number.isInteger(idx) && papers[idx]) {
+                if (hoverIdx !== idx) {
+                  hoverIdx = idx;
+                  renderHover(papers[idx]);
+                }
+              }
 
-                // Style the circle
-                ctx.beginPath();
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'; // Circle color
-                ctx.lineWidth = 2; // Circle line width
-                ctx.setLineDash([4, 4]); // 4px dash, 4px space
+              // keep your existing RI radar behavior
+              const want = (ds === 1) && ri.length;
+              if (want) { chart._radar = true; chart._ang = chart._ang || 0; run(); }
+              else if (chart._radar) { chart._radar = false; run(); }
+            },
+            onClick: (evt, els) => {
+              if (!els?.length) return;
+              const e = els[0];
+              const d = evt.chart.data.datasets[e.datasetIndex].data[e.index];
+              if (d?.pdfUrl) window.open(d.pdfUrl, '_blank');
+            },
+            plugins: { tooltip: { callbacks: { label: (c) => c.raw.label } } }
+          },
+          plugins: [sweepPlugin, paintPlugin]
+        });
 
-                // Draw the circle
-                ctx.arc(x, y, pixelRadius, 0, 2 * Math.PI);
+        function run() {
+          if (raf) return;
+          last = 0;
+          raf = requestAnimationFrame(step);
+        }
 
-                ctx.stroke();
-                ctx.restore();
+        function step(ts) {
+          if (!last) last = ts;
+          const dt = Math.min(0.05, (ts - last) / 1000);
+          last = ts;
+
+          // fade all
+          for (let i = 0; i < paint.length; i++) paint[i] = Math.max(0, paint[i] - FADE * dt);
+
+          // advance + hit-test while radar on
+          if (chart._radar) {
+            chart._ang = norm((chart._ang || 0) + SPEED * dt);
+
+            const mRI = chart.getDatasetMeta(1), mP = chart.getDatasetMeta(0);
+            if (mRI?.data?.[0] && mP?.data?.length) {
+              const { x: cx, y: cy } = mRI.data[0].getProps(['x', 'y'], true);
+              const s = norm(chart._ang), e = norm(chart._ang + W);
+
+              for (let i = 0; i < mP.data.length; i++) {
+                const { x, y } = mP.data[i].getProps(['x', 'y'], true);
+                const a = norm(Math.atan2(y - cy, x - cx));
+                if (inWedge(a, s, e)) paint[i] = 1;
               }
             }
-          };
-          // 3. Register the plugin globally
-          Chart.register(hoverCirclePlugin);
-          // 4. Create the Chart.js scatter plot
-          new Chart(canvas, {
-            type: 'scatter',
-            data: {
-              datasets: [
-                {
-                  label: 'Paper Concepts',
-                  data: paperPoints,
-                  backgroundColor: 'rgb(54, 162, 235)'
-                },
-                {
-                  label: 'Research Interest',
-                  data: riPoints,
-                  backgroundColor: 'rgb(255, 99, 132)',
-                  pointRadius: 7,
-                  pointHoverRadius: 10
-                }
-              ]
-            },
-            options: {
-              onClick: (event, elements) => {
-                if (elements.length > 0) {
-                  const element = elements[0];
-                  const datasetIndex = element.datasetIndex;
-                  const dataIndex = element.index;
-                  const pointData = event.chart.data.datasets[datasetIndex].data[dataIndex];
-                  if (pointData.pdfUrl) {
-                    window.open(pointData.pdfUrl, '_blank'); // Opens PDF in new tab
-                  }
-                }
-              },
-              scales: {
-                x: {
-                  title: {
-                    display: true,
-                    text: 'Dimension 1'
-                  }
-                },
-                y: {
-                  title: {
-                    display: true,
-                    text: 'Dimension 2'
-                  }
-                }
-              },
-              plugins: {
-                tooltip: {
-                  callbacks: {
-                    label: function(context) {
-                      // Show the paper's title or research interest in the tooltip on hover
-                      return context.raw.label;
-                    }
-                  }
-                }
-              }
-            }
-          });
+          }
+
+          chart.draw();
+
+          if (chart._radar || anyPaint()) raf = requestAnimationFrame(step);
+          else { cancelAnimationFrame(raf); raf = null; last = 0; }
         }
       });
+
