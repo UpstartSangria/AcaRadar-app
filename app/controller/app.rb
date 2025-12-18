@@ -12,6 +12,11 @@ require_relative '../presentation/representers/papers_page_response'
 require_relative '../infrastructure/acaradar_api'
 
 # rubocop:disable Metrics/BlockLength
+# rubocop:disable Metrics/AbcSize
+# rubocop:disable Metrics/CyclomaticComplexity
+# rubocop:disable Naming/MethodParameterName
+# rubocop:disable Metrics/MethodLength
+# rubocop:disable Metrics/PerceivedComplexity
 module AcaRadar
   # Web App that consumes the AcaRadar API
   class App < Roda
@@ -50,11 +55,16 @@ module AcaRadar
           result = Service::EmbedResearchInterest.call(request)
 
           if result.success?
-            raw = JSON.parse(result.message) rescue {}
-            payload = (raw.is_a?(Hash) && raw.key?('data')) ? raw['data'] : raw
+            raw = begin
+              JSON.parse(result.message)
+            rescue StandardError
+              {}
+            end
+            payload = raw.is_a?(Hash) && raw.key?('data') ? raw['data'] : raw
 
             session[:research_interest_term] = payload['term'] || request.term
-            session[:research_interest_2d]   = normalize_vector_2d(payload['vector_2d'] || payload['research_interest_2d'])
+            session[:research_interest_2d]   =
+              normalize_vector_2d(payload['vector_2d'] || payload['research_interest_2d'])
 
             flash[:notice] = 'Research interest has been set!'
           else
@@ -68,6 +78,10 @@ module AcaRadar
       # GET /selected_journals
       routing.on 'selected_journals' do
         request = Request::ListPapers.new(routing.params)
+        research_interest_term = routing.params['term']
+        vector_x = routing.params['vector_x']
+        vector_y = routing.params['vector_y']
+        research_interest_2d = vector_x && vector_y ? [vector_x.to_f, vector_y.to_f] : nil
 
         unless request.valid?
           flash[:notice] = 'Please select 2 different journals.'
@@ -81,8 +95,12 @@ module AcaRadar
           routing.redirect '/'
         end
 
-        raw = JSON.parse(result.message) rescue {}
-        payload_hash = (raw.is_a?(Hash) && raw.key?('data')) ? raw['data'] : raw
+        raw = begin
+          JSON.parse(result.message)
+        rescue StandardError
+          {}
+        end
+        payload_hash = raw.is_a?(Hash) && raw.key?('data') ? raw['data'] : raw
         payload_json = payload_hash.to_json
 
         papers_page = Representer::PapersPageResponse.new(OpenStruct.new)
@@ -93,8 +111,8 @@ module AcaRadar
              locals: {
                journals: papers_page.journals || [],
                papers: Array(papers_page.papers&.data).map { |p| AcaRadar::View::Paper.new(p) },
-               research_interest_term: session[:research_interest_term],
-               research_interest_2d: session[:research_interest_2d], # ALWAYS nil or [x,y]
+               research_interest_term: research_interest_term,
+               research_interest_2d: research_interest_2d, # ALWAYS nil or [x,y]
                pagination: papers_page.pagination || {},
                error: nil
              }
@@ -113,6 +131,7 @@ module AcaRadar
         x = v['x'] || v[:x]
         y = v['y'] || v[:y]
         return nil if x.nil? || y.nil?
+
         return [x.to_f, y.to_f]
       end
 
@@ -120,6 +139,7 @@ module AcaRadar
         x = v[0]
         y = v[1]
         return nil if x.nil? || y.nil?
+
         return [x.to_f, y.to_f]
       end
 
@@ -130,3 +150,8 @@ module AcaRadar
   end
 end
 # rubocop:enable Metrics/BlockLength
+# rubocop:enable Metrics/AbcSize
+# rubocop:enable Metrics/CyclomaticComplexity
+# rubocop:enable Naming/MethodParameterName
+# rubocop:enable Metrics/MethodLength
+# rubocop:enable Metrics/PerceivedComplexity

@@ -124,22 +124,25 @@ script src="http://localhost:9292/faye/client.js"
               // Expecting message format: { percent: 50, status: '...' }
               if (progressBar && message.percent !== undefined) {
                   const percentVal = message.percent;
+                  const messageText = message.message;
                   progressBar.style.width = percentVal + '%';
                   progressBar.setAttribute('aria-valuenow', percentVal);
-                  progressBar.innerText = percentVal + '%';
+                  progressBar.innerText = `${percentVal}%: ${messageText}`;
               }
 
               // Check for Completion
               if (message.percent >= 100) {
                   console.log("7. [Faye] Job Complete!");
+
+                  if (message.vector_2d) {
+                  researchInterestVector = message.vector_2d;
+                  console.log("8. [Frontend] Vector stored:", researchInterestVector);
+                  }
                   
                   // Final UI Updates
                   progressBar.classList.remove('progress-bar-animated'); // Stop animation
                   embedButton.disabled = false;
                   embedButton.querySelector('.button-text').innerText = "Done";
-                  
-                  // Optional: Unsubscribe to stop listening
-                  // subscription.cancel();
               }
             });
             
@@ -162,18 +165,47 @@ script src="http://localhost:9292/faye/client.js"
       }
 
       // ==========================================
-      // 2. Find Journals Form (Existing Logic)
+      // 2. Find Journals Form (Modified Logic)
       // ==========================================
       const journalsForm = document.getElementById('find-journals-form');
       if (journalsForm) {
-        journalsForm.addEventListener('submit', function() {
-          const button = document.getElementById('find-button');
-          const spinner = button.querySelector('.spinner-grow');
-          const buttonText = button.querySelector('.button-text');
-          
-          button.disabled = true;
-          spinner.classList.remove('d-none');
-          buttonText.textContent = '   Loading...';
-        });
-      }
-      });
+          // --- ACTION 3: Change 'submit' to listen for the button 'click' instead ---
+          const findButton = document.getElementById('find-button');
+          findButton.addEventListener('click', function(e) {
+              e.preventDefault(); // IMPORTANT: Stop the default form submission
+
+              // --- A. Get journal values ---
+              const journal1 = document.getElementById('journal_select1').value;
+              const journal2 = document.getElementById('journal_select2').value;
+              const term = document.getElementById('research_interest_input').value;
+
+              // --- B. Check if we have the vector ---
+              if (!researchInterestVector) {
+                  alert("Please 'Embed' a research interest first!");
+                  return;
+              }
+
+              // --- C. Show loading state ---
+              const spinner = findButton.querySelector('.spinner-grow');
+              const buttonText = findButton.querySelector('.button-text');
+              findButton.disabled = true;
+              spinner.classList.remove('d-none');
+              buttonText.textContent = '   Loading...';
+
+              // --- D. Build the new URL with all the data ---
+              const params = new URLSearchParams({
+                  term: term,
+                  journal1: journal1,
+                  journal2: journal2,
+                  vector_x: researchInterestVector[0],
+                  vector_y: researchInterestVector[1]
+              });
+
+              const newUrl = `/selected_journals?${params.toString()}`;
+              console.log("Redirecting to:", newUrl);
+
+              // --- E. Redirect the browser ---
+              window.location.href = newUrl;
+          });
+          }
+          });
