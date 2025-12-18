@@ -4,6 +4,7 @@ require 'time'
 
 module AcaRadar
   module View
+    # class for paper views
     class Paper
       def initialize(entity)
         @entity = entity

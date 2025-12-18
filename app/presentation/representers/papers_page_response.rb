@@ -9,6 +9,7 @@ require_relative 'papers_collection'
 
 module AcaRadar
   module Representer
+    # class for paper page response
     class PapersPageResponse < Representer::Base
       include Roar::JSON
 
