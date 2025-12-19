@@ -17,6 +17,7 @@ require_relative '../infrastructure/acaradar_api'
 # rubocop:disable Naming/MethodParameterName
 # rubocop:disable Metrics/MethodLength
 # rubocop:disable Metrics/PerceivedComplexity
+# rubocop:disable Metrics/ClassLength
 module AcaRadar
   # Web App that consumes the AcaRadar API
   class App < Roda
@@ -37,6 +38,8 @@ module AcaRadar
 
       # GET /
       routing.root do
+        @api_host = ENV.fetch('API_HOST')
+        puts @api_host
         journal_options = AcaRadar::View::JournalOption.new
         watched_papers = []
         response.expires 60, public: true
@@ -155,3 +158,4 @@ end
 # rubocop:enable Naming/MethodParameterName
 # rubocop:enable Metrics/MethodLength
 # rubocop:enable Metrics/PerceivedComplexity
+# rubocop:enable Metrics/ClassLength

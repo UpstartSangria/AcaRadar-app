@@ -1,4 +1,4 @@
-script src="http://localhost:9292/faye/client.js"
+script src="#{@api_host}/faye/client.js"
 .container-fluid
   hr.my-4
   form role="form" id="research-interest-form"
@@ -50,6 +50,8 @@ script src="http://localhost:9292/faye/client.js"
       h4.alert-heading Welcome!
       p You haven't viewed any papers yet. Use the form above to find some interesting research.
   javascript:
+    const API_HOST = "#{@api_host}";
+    console.log("0. [Frontend] API defined:", API_HOST);
     document.addEventListener("DOMContentLoaded", function() {
 
       // ==========================================
@@ -83,9 +85,9 @@ script src="http://localhost:9292/faye/client.js"
 
           try {
             // --- B. CALL API (Port 9292) ---
-            console.log("2. [Frontend] Sending POST request to Port 9292...");
+            console.log("2. [Frontend] Sending POST request to ${API_HOST}...");
             
-            const response = await fetch('http://localhost:9292/api/v1/research_interest', {
+            const response = await fetch(`${API_HOST}/api/v1/research_interest`, {
               method: 'POST',
               headers: { 
                 'Content-Type': 'application/json',
@@ -113,8 +115,7 @@ script src="http://localhost:9292/faye/client.js"
             embedButton.querySelector('.button-text').innerText = "Processing...";
 
             // --- D. SUBSCRIBE TO FAYE ---
-            // Ensure we point to port 9292
-            const client = new Faye.Client('http://localhost:9292/faye');
+            const client = new Faye.Client(`${API_HOST}/faye`);
             
             console.log(`5. [Faye] Subscribing to channel: /${requestId}`);
 
