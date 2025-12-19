@@ -1,4 +1,18 @@
-script src="#{@api_host}/faye/client.js"
+script src="http://localhost:9292/faye/client.js"
+.container-fluid
+
+  / ===== Flash / Error Area =====
+  - if flash[:error]
+    .alert.alert-danger.mt-3 role="alert"
+      = flash[:error]
+  - if flash[:notice]
+    .alert.alert-success.mt-3 role="alert"
+      = flash[:notice]
+
+  / JS-driven flash area (for AJAX errors)
+  .alert.mt-3.d-none id="flash-area" role="alert"
+    span id="flash-text"
+
 .container-fluid
   hr.my-4
   form role="form" id="research-interest-form"
@@ -54,6 +68,22 @@ script src="#{@api_host}/faye/client.js"
     console.log("0. [Frontend] API defined:", API_HOST);
     document.addEventListener("DOMContentLoaded", function() {
 
+      const flashArea = document.getElementById('flash-area');
+      const flashText = document.getElementById('flash-text');
+
+      function showFlash(type, msg) {
+        if (!flashArea || !flashText) return;
+        flashArea.classList.remove('d-none', 'alert-danger', 'alert-success', 'alert-warning', 'alert-info');
+        flashArea.classList.add(type); // e.g. 'alert-danger'
+        flashText.textContent = msg || 'Something went wrong.';
+      }
+
+      function clearFlash() {
+        if (!flashArea || !flashText) return;
+        flashText.textContent = '';
+        flashArea.classList.add('d-none');
+      }
+
       // ==========================================
       // 1. Research Interest Form (AJAX + Faye)
       // ==========================================
@@ -61,6 +91,8 @@ script src="#{@api_host}/faye/client.js"
       const progressBarContainer = document.getElementById('search-progress');
       const progressBar = progressBarContainer ? progressBarContainer.querySelector('.progress-bar') : null;
       const embedButton = document.getElementById('embed-button');
+
+      let researchInterestVector = null;
 
       // Safety Check
       if (researchForm) {
@@ -73,6 +105,7 @@ script src="#{@api_host}/faye/client.js"
           // --- A. RESET UI ---
           embedButton.disabled = true;
           embedButton.querySelector('.button-text').innerText = "Starting...";
+          clearFlash();
           
           // Reset and show progress bar
           progressBarContainer.classList.remove('d-none');
@@ -87,7 +120,8 @@ script src="#{@api_host}/faye/client.js"
             // --- B. CALL API (Port 9292) ---
             console.log("2. [Frontend] Sending POST request to ${API_HOST}...");
             
-            const response = await fetch(`${API_HOST}/api/v1/research_interest`, {
+            const response = await fetch('/api_proxy/research_interest', {
+              credentials: 'same-origin',
               method: 'POST',
               headers: { 
                 'Content-Type': 'application/json',
@@ -96,26 +130,50 @@ script src="#{@api_host}/faye/client.js"
               body: JSON.stringify({ term: termInput })
             });
 
+            const result = await response.json().catch(() => ({}));
+            const data = result.data || {};
+
             if (!response.ok) {
-              throw new Error(`Server Error: ${response.status} ${response.statusText}`);
+              // API returns message + data.error; prefer the friendliest
+              const msg =
+                (data && (data.error || data.message)) ||
+                result.message ||
+                `Server Error: ${response.status} ${response.statusText}`;
+              throw new Error(msg);
             }
 
-            const result = await response.json();
             console.log("3. [Frontend] API Response received:", result);
 
             // --- C. GET REQUEST ID ---
             // Based on your logs, the structure is inside result.data.request_id
-            const requestId = result.data ? result.data.request_id : null;
+            const requestId = data.request_id || null;
             
             if (!requestId) {
               throw new Error("Response did not contain a request_id in result.data");
+            }
+
+            if (data.status === 'completed' || data.cached) {
+              researchInterestVector = data.vector_2d || null;
+
+              if (progressBar) {
+                progressBar.style.width = '100%';
+                progressBar.setAttribute('aria-valuenow', 100);
+                progressBar.innerText = '100%: Cached';
+                progressBar.classList.remove('progress-bar-animated');
+              }
+
+              embedButton.disabled = false;
+              embedButton.querySelector('.button-text').innerText = "Done";
+              return;
             }
 
             console.log("4. [Frontend] Request ID obtained:", requestId);
             embedButton.querySelector('.button-text').innerText = "Processing...";
 
             // --- D. SUBSCRIBE TO FAYE ---
-            const client = new Faye.Client(`${API_HOST}/faye`);
+            // Ensure we point to port 9292
+            if (!window.Faye) throw new Error("Faye client not loaded (window.Faye is undefined)");
+            const client = new window.Faye.Client('http://localhost:9292/faye');
             
             console.log(`5. [Faye] Subscribing to channel: /${requestId}`);
 
@@ -154,9 +212,12 @@ script src="#{@api_host}/faye/client.js"
 
           } catch (error) {
             console.error("!!! [Frontend] Error:", error);
-            alert("An error occurred: " + error.message);
-            
+            showFlash('alert-danger', error.message);
+
             // Reset button so user can try again
+            if (progressBar) {
+              progressBar.classList.remove('progress-bar-animated');
+            }
             embedButton.disabled = false;
             embedButton.querySelector('.button-text').innerText = "Embed";
           }

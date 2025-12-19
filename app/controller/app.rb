@@ -29,8 +29,58 @@ module AcaRadar
     plugin :halt
     plugin :all_verbs
     plugin :flash
-    plugin :sessions,
-           secret: ENV.fetch('SESSION_SECRET', 'a_different_secret_for_the_web_app')
+    plugin :sessions, secret: ENV.fetch('SESSION_SECRET', 'a_different_secret_for_the_web_app')
+
+    API_BASE = ENV.fetch('ACARADAR_API_URL', 'http://localhost:9292')
+
+    def api_cookie_header
+      session[:acaradar_api_cookie].to_s.strip
+    end
+
+    def store_api_cookie!(set_cookie_header)
+      return if set_cookie_header.nil?
+
+      # HTTP gem may return a single string or an Array
+      raw = set_cookie_header.is_a?(Array) ? set_cookie_header : [set_cookie_header]
+
+      # We only need the "name=value" for each cookie (ignore attributes)
+      pairs = raw.map { |sc| sc.to_s.split(';', 2).first }.compact
+
+      # Merge with existing cookies (by cookie name)
+      existing = {}
+      api_cookie_header.split(/;\s*/).each do |pair|
+        k, v = pair.split('=', 2)
+        existing[k] = v if k && v
+      end
+
+      pairs.each do |pair|
+        k, v = pair.split('=', 2)
+        existing[k] = v if k && v
+      end
+
+      session[:acaradar_api_cookie] = existing.map { |k, v| "#{k}=#{v}" }.join('; ')
+    end
+
+    def api_request(method:, path:, json: nil, query: nil, headers: {})
+      url = "#{API_BASE}#{path}"
+      url = "#{url}?#{URI.encode_www_form(query)}" if query && !query.empty?
+
+      h = { 'Accept' => 'application/json' }.merge(headers)
+      h['Content-Type'] = 'application/json' if json
+      h['Cookie'] = api_cookie_header unless api_cookie_header.empty?
+
+      http = HTTP.headers(h)
+      resp =
+        if json
+          http.public_send(method, url, body: JSON.generate(json))
+        else
+          http.public_send(method, url)
+        end
+
+      store_api_cookie!(resp.headers['Set-Cookie'])
+      resp
+    end
+
 
     route do |routing|
       routing.assets
@@ -41,10 +91,64 @@ module AcaRadar
         @api_host = ENV.fetch('API_HOST')
         puts @api_host
         journal_options = AcaRadar::View::JournalOption.new
-        watched_papers = []
+        watched_papers = Array(session[:watched_papers])
         response.expires 60, public: true
         view 'home', locals: { options: journal_options, watched_papers: watched_papers }
       end
+
+      routing.post 'watch_paper' do
+        response['Content-Type'] = 'application/json'
+      
+        body = request.body.read.to_s
+        payload = JSON.parse(body) rescue {}
+      
+        session[:watched_papers] ||= []
+        session[:watched_papers].unshift(payload.slice('origin_id', 'title', 'published', 'summary'))
+        session[:watched_papers] = session[:watched_papers].take(20)
+      
+        { ok: true }.to_json
+      end      
+
+      routing.on 'api_proxy' do
+        # Proxy: POST /api_proxy/research_interest  -> API POST /api/v1/research_interest
+        routing.post 'research_interest' do
+          response['Content-Type'] = 'application/json'
+      
+          body = request.body.read.to_s
+          payload =
+            begin
+              body.empty? ? {} : JSON.parse(body)
+            rescue StandardError
+              {}
+            end
+      
+          term = payload['term']
+      
+          resp = api_request(
+            method: :post,
+            path: '/api/v1/research_interest',
+            json: { term: term }
+          )
+      
+          response.status = resp.code
+          resp.to_s
+        end
+      
+        # Proxy: GET /api_proxy/papers -> API GET /api/v1/papers (keeps same API session)
+        routing.get 'papers' do
+          response['Content-Type'] = 'application/json'
+      
+          # pass through query params (journal1, journal2, page, etc.)
+          resp = api_request(
+            method: :get,
+            path: '/api/v1/papers',
+            query: routing.params
+          )
+      
+          response.status = resp.code
+          resp.to_s
+        end
+      end      
 
       routing.on 'research_interest' do
         routing.post do
@@ -91,18 +195,30 @@ module AcaRadar
           routing.redirect '/'
         end
 
-        result = Service::ListPapers.call(request)
+        resp = api_request(
+          method: :get,
+          path: '/api/v1/papers',
+          query: routing.params
+        )
 
-        if result.failure?
-          flash[:error] = "API Error: #{result.message}"
+        unless resp.status.success?
+          raw_err = begin
+            JSON.parse(resp.to_s)
+          rescue StandardError
+            {}
+          end
+          msg = raw_err['message'] || "API Error (#{resp.code})"
+          flash[:error] = msg
           routing.redirect '/'
         end
 
         raw = begin
-          JSON.parse(result.message)
+          JSON.parse(resp.to_s)
         rescue StandardError
           {}
         end
+
+        
         payload_hash = raw.is_a?(Hash) && raw.key?('data') ? raw['data'] : raw
         payload_json = payload_hash.to_json
 
