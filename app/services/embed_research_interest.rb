@@ -8,7 +8,7 @@ module AcaRadar
     class EmbedResearchInterest
       include Dry::Monads::Result::Mixin
 
-      API_ROOT = ENV.fetch('API_URL', 'http://localhost:9292/api/v1')
+      API_ROOT = ENV.fetch('API_HOST', 'http://localhost:9292/api/v1')
 
       def self.call(request)
         data = { term: request.term }
