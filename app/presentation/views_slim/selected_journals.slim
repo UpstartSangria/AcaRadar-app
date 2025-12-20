@@ -28,8 +28,13 @@ html lang="en"
       - if error
         .alert.alert-danger.show = error
 
+      - total_count = pagination.is_a?(Hash) ? (pagination['total_count'] || pagination[:total_count]) : nil
       p.mt-4
-        | Found #{papers.count} papers in total!
+        - if total_count
+          | Showing #{papers.count} of #{total_count} papers.
+        - else
+          | Found #{papers.count} papers.
+
 
       - if papers.any?
         - plot_data = []
@@ -45,8 +50,8 @@ html lang="en"
         h3.mt-4 Selected Paper
         #hoverPaper.border.rounded.p-3.mb-4
           h5#hoverTitle.mb-1.text-break Hover a paper dot to see details
-          .text-muted.small#hoverPublished
           .mt-3#hoverAuthors
+          .text-muted.small#hoverPublished
           .mt-3#hoverSummary
           .mt-3
             a#hoverPdf href="#" target="_blank" rel="noopener" Open PDF
@@ -60,8 +65,8 @@ html lang="en"
                   = paper.title
               .accordion-collapse.collapse id="collapse-#{index}" data-bs-parent="#papersAccordion"
                 .accordion-body
-                  h6.text-muted Published: #{paper.published}
                   p.mt-3 = paper.authors_list
+                  p.text-muted Published: #{paper.published}
                   p.mt-3 = paper.short_summary
                   p.mt-3 
                     a href=paper.pdf_url target="_blank" rel="noopener" Open PDF

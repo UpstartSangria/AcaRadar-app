@@ -28,23 +28,42 @@ script src="http://localhost:9292/faye/client.js"
           span.spinner-grow.spinner-grow-sm.d-none role="status" aria-hidden="true"
           span.button-text Embed
 
-  hr.my-4
+    hr.my-4
   form role="form" action="/selected_journals" method='GET' id='find-journals-form'
-    .row.align-items-center
+    input type="hidden" name="request_id" id="request_id"
+
+    .row.align-items-start.g-3
       .col-md-2.d-flex.align-items-center
         .h4.mb-0.fw-bold Select Journals
+
       .col-md-4
-        select name='journal1' id='journal_select1' class="form-control"
+        label.form-label.fw-bold.mb-1 Journals
+        select name='journals[]' id='journals_select' class="form-control" multiple=true size="8"
           - AcaRadar::View::JournalOption.all.each do |text, value|
             option value=value = text
-      .col-md-4
-        select name='journal2' id='journal_select2' class="form-control"
-          - AcaRadar::View::JournalOption.all.each do |text, value|
-            option value=value = text
+        .form-text Select 1+ journals (Cmd/Ctrl+Click for multi-select)
+
       .col-md-2
+        label.form-label.fw-bold.mb-1 Top N
+        input.form-control type="number" name="top_n" id="top_n" min="1" max="200" placeholder="e.g. 25"
+        .form-text
+          | Leave blank for paged mode
+
+
+      .col-md-2
+        label.form-label.fw-bold.mb-1 From
+        input.form-control type="date" name="min_date" id="min_date"
+
+      .col-md-2
+        label.form-label.fw-bold.mb-1 To
+        input.form-control type="date" name="max_date" id="max_date"
+
+    .row.mt-3
+      .col-md-2.offset-md-10
         button type='submit' id='find-button' class="btn btn-primary w-100"
           span.spinner-grow.spinner-grow-sm.d-none role="status" aria-hidden="true"
           span.button-text Find
+
   hr.my-4
   h4.mb-3.fw-bold Previously Viewed Papers
   - if watched_papers.any?
@@ -92,6 +111,8 @@ script src="http://localhost:9292/faye/client.js"
       const embedButton = document.getElementById('embed-button');
 
       let researchInterestVector = null;
+      let researchRequestId = null;
+      let researchInterestRequestId = null;
 
       // Safety Check
       if (researchForm) {
@@ -146,10 +167,18 @@ script src="http://localhost:9292/faye/client.js"
             // --- C. GET REQUEST ID ---
             // Based on your logs, the structure is inside result.data.request_id
             const requestId = data.request_id || null;
-            
+
             if (!requestId) {
               throw new Error("Response did not contain a request_id in result.data");
             }
+
+            // Make request_id available to the "Find" flow
+            researchRequestId = requestId;
+            const requestIdInput = document.getElementById('request_id');
+            if (requestIdInput) requestIdInput.value = requestId;
+
+            // Always store request_id so "Find" can use it
+            researchInterestRequestId = requestId;
 
             if (data.status === 'completed' || data.cached) {
               researchInterestVector = data.vector_2d || null;
@@ -167,6 +196,7 @@ script src="http://localhost:9292/faye/client.js"
             }
 
             console.log("4. [Frontend] Request ID obtained:", requestId);
+
             embedButton.querySelector('.button-text').innerText = "Processing...";
 
             // --- D. SUBSCRIBE TO FAYE ---
@@ -226,47 +256,53 @@ script src="http://localhost:9292/faye/client.js"
       }
 
       // ==========================================
-      // 2. Find Journals Form (Modified Logic)
+      // 2. Find Journals Form (multi-select + filters)
       // ==========================================
       const journalsForm = document.getElementById('find-journals-form');
       if (journalsForm) {
-          // --- ACTION 3: Change 'submit' to listen for the button 'click' instead ---
-          const findButton = document.getElementById('find-button');
+        const findButton = document.getElementById('find-button');
+
+        if (findButton) {
           findButton.addEventListener('click', function(e) {
-              e.preventDefault(); // IMPORTANT: Stop the default form submission
+            e.preventDefault();
 
-              // --- A. Get journal values ---
-              const journal1 = document.getElementById('journal_select1').value;
-              const journal2 = document.getElementById('journal_select2').value;
-              const term = document.getElementById('research_interest_input').value;
+            const term = (document.getElementById('research_interest_input')?.value || '').trim();
 
-              // --- B. Check if we have the vector ---
-              if (!researchInterestVector) {
-                  alert("Please 'Embed' a research interest first!");
-                  return;
-              }
+            const journalsSelect = document.getElementById('journals_select');
+            const selectedJournals = journalsSelect
+              ? Array.from(journalsSelect.selectedOptions).map(o => o.value).filter(Boolean)
+              : [];
 
-              // --- C. Show loading state ---
-              const spinner = findButton.querySelector('.spinner-grow');
-              const buttonText = findButton.querySelector('.button-text');
-              findButton.disabled = true;
-              spinner.classList.remove('d-none');
-              buttonText.textContent = '   Loading...';
+            const topN = (document.getElementById('top_n')?.value || '').trim();
+            const minDate = (document.getElementById('min_date')?.value || '').trim();
+            const maxDate = (document.getElementById('max_date')?.value || '').trim();
 
-              // --- D. Build the new URL with all the data ---
-              const params = new URLSearchParams({
-                  term: term,
-                  journal1: journal1,
-                  journal2: journal2,
-                  vector_x: researchInterestVector[0],
-                  vector_y: researchInterestVector[1]
-              });
+            if (selectedJournals.length === 0) {
+              alert('Please select at least one journal.');
+              return;
+            }
 
-              const newUrl = `/selected_journals?${params.toString()}`;
-              console.log("Redirecting to:", newUrl);
+            // top_n requires a request_id (embedded research interest)
+            if (topN && !researchRequestId) {
+              alert("Please 'Embed' a research interest first (required for Top N).");
+              return;
+            }
 
-              // --- E. Redirect the browser ---
-              window.location.href = newUrl;
+            const params = new URLSearchParams();
+            if (term) params.set('term', term);
+
+            // IMPORTANT: keep brackets so Rack parses as array everywhere
+            selectedJournals.forEach(j => params.append('journals[]', j));
+
+            if (researchRequestId) params.set('request_id', researchRequestId);
+            if (topN) params.set('top_n', topN);
+            if (minDate) params.set('min_date', minDate);
+            if (maxDate) params.set('max_date', maxDate);
+
+            const newUrl = `/selected_journals?${params.toString()}`;
+            console.log('Redirecting to:', newUrl);
+            window.location.href = newUrl;
           });
-          }
-          });
+        }
+      }
+    });
