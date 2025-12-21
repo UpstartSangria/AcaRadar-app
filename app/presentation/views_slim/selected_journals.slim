@@ -7,6 +7,7 @@ html lang="en"
 
     script src="https://cdn.jsdelivr.net/npm/chart.js"
     script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+    script src="https://cdn.jsdelivr.net/npm/d3@7"
 
     css:
       .chart-container {
@@ -35,8 +36,21 @@ html lang="en"
         - plot_data = []
         - ri_plot_data = (research_interest_2d && research_interest_2d.size >= 2) ? [{ x: research_interest_2d[0], y: research_interest_2d[1], label: research_interest_term }] : []
 
-        - papers.each do |paper|
-          - plot_data << {x: paper.two_dim_embedding[0], y: paper.two_dim_embedding[1], label: paper.title, pdfUrl: paper.pdf_url, published: paper.published, authors: paper.authors_list, summary: paper.short_summary}
+        ruby:
+          plot_data = papers.map do |paper|
+            emb = paper.two_dim_embedding || [0, 0]
+            {
+              x: emb[0],
+              y: emb[1],
+              label: paper.title,
+              title: paper.title,
+              pdfUrl: paper.pdf_url,
+              published: paper.published,
+              authors: paper.authors_list,
+              summary: paper.short_summary,
+              concepts: paper.concepts
+            }
+          end
 
         h3.mt-3 Concept Visualization
         .chart-container
@@ -49,7 +63,13 @@ html lang="en"
           .mt-3#hoverAuthors
           .mt-3#hoverSummary
           .mt-3
-            a#hoverPdf href="#" target="_blank" rel="noopener" Open PDF
+            a#hoverPdf.btn.btn-sm.btn-outline-primary.d-none href="#" target="_blank" rel="noopener"
+              | Open PDF
+
+        h6.mt-3 Concepts
+        #conceptCluster.border.rounded.p-2.mb-4 style="min-height: 220px;"
+          svg#conceptSvg width="100%" height="220"
+          .small.text-muted#conceptHint Hover a paper dot to see the magic!
 
         h3.mt-4 Papers
         #papersAccordion.accordion.mb-4
@@ -63,239 +83,712 @@ html lang="en"
                   h6.text-muted Published: #{paper.published}
                   p.mt-3 = paper.authors_list
                   p.mt-3 = paper.short_summary
-                  p.mt-3 
-                    a href=paper.pdf_url target="_blank" rel="noopener" Open PDF
+                  p.mt-3
+                    a.open-pdf.btn.btn-sm.btn-outline-primary(
+                      href=paper.pdf_url
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-pdf-url=paper.pdf_url
+                      data-title=paper.title
+                      data-published=paper.published
+                      data-summary=paper.short_summary
+                    )
+                      | Open PDF
+
+                  / --- Mini concept map per paper (renders when accordion opens) ---
+                  h6.mt-3 Concepts map
+                  .border.rounded.p-2.mt-2 style="min-height: 180px;"
+                    svg.concept-svg id="conceptSvg-#{index}" width="100%" height="180" data-concepts=paper.concepts.to_json
+
       - else
         p No papers found.
 
+  javascript:
+    document.addEventListener('DOMContentLoaded', () => {
+      // -----------------------------
+      // Read chart data from DOM
+      // -----------------------------
+      const el = document.getElementById('concept-chart');
+      if (!el || typeof Chart === 'undefined') return;
 
+      const papers = (() => {
+        try { return JSON.parse(el.dataset.paperPoints || '[]'); }
+        catch { return []; }
+      })();
 
-    javascript:
-      document.addEventListener('DOMContentLoaded', () => {
-        const el = document.getElementById('concept-chart');
-        if (!el || typeof Chart === 'undefined') return;
+      const ri = (() => {
+        try { return JSON.parse(el.dataset.riPoints || '[]'); }
+        catch { return []; }
+      })();
 
-        const papers = (() => { try { return JSON.parse(el.dataset.paperPoints || '[]'); } catch { return []; } })();
-        const ri = (() => { try { return JSON.parse(el.dataset.riPoints || '[]'); } catch { return []; } })();
+      const riConcepts = #{{(research_interest_concepts || []).to_json}};
 
-        const hoverTitle = document.getElementById('hoverTitle');
-        const hoverPublished = document.getElementById('hoverPublished');
-        const hoverAuthors = document.getElementById('hoverAuthors');
-        const hoverSummary = document.getElementById('hoverSummary');
-        const hoverPdf = document.getElementById('hoverPdf');
+      // -----------------------------
+      // Matching logic (concept hits)
+      // -----------------------------
+      const STOP = new Set([
+        "a","an","the","and","or","but","to","of","in","on","for","with","at","by","from",
+        "is","are","was","were","be","been","being",
+        "i","you","we","they","he","she","it","me","my","your","our","their",
+        "want","know"
+      ]);
 
-        let hoverIdx = null;
+      function norm(s) {
+        return String(s || "")
+          .toLowerCase()
+          .replace(/[_\-]+/g, " ")
+          .replace(/[^a-z0-9\s]/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
 
-        function renderHover(p) {
-          if (!hoverTitle) return;
+      function tokens(s) {
+        const t = norm(s);
+        if (!t) return [];
+        return t
+          .split(" ")
+          .map(x => x.trim())
+          .filter(x => x.length >= 2)
+          .filter(x => !STOP.has(x));
+      }
 
-          if (!p) {
-            hoverTitle.textContent = 'Hover a paper dot to see details';
-            if (hoverPublished) hoverPublished.textContent = '';
-            if (hoverAuthors) hoverAuthors.textContent = '';
-            if (hoverSummary) hoverSummary.textContent = '';
-            if (hoverPdf) hoverPdf.href = '#';
-            return;
-          }
-
-          hoverTitle.textContent = p.label || '';
-          if (hoverPublished) hoverPublished.textContent = p.published ? `Published: ${p.published}` : '';
-          if (hoverAuthors) hoverAuthors.textContent = p.authors || '';
-          if (hoverSummary) hoverSummary.textContent = p.summary || '';
-          if (hoverPdf) hoverPdf.href = p.pdfUrl || '#';
+      const riExact = new Set(Array.isArray(riConcepts) ? riConcepts.map(norm).filter(Boolean) : []);
+      const riTokenSet = new Set();
+      if (Array.isArray(riConcepts)) {
+        for (const c of riConcepts) {
+          for (const tok of tokens(c)) riTokenSet.add(tok);
         }
+      }
 
-        renderHover(null);
+      function isHitConcept(conceptStr) {
+        const n = norm(conceptStr);
+        if (!n) return false;
+        if (riExact.has(n)) return true;
 
+        const ts = tokens(conceptStr);
+        if (ts.length === 0) return false;
+        return ts.some(tok => riTokenSet.has(tok));
+      }
 
+      // -----------------------------
+      // Hover panel + Open PDF tracking
+      // -----------------------------
+      const hoverTitle = document.getElementById('hoverTitle');
+      const hoverPublished = document.getElementById('hoverPublished');
+      const hoverAuthors = document.getElementById('hoverAuthors');
+      const hoverSummary = document.getElementById('hoverSummary');
+      const hoverPdf = document.getElementById('hoverPdf');
 
-        const center = ri[0] ? { x: ri[0].x, y: ri[0].y } : (() => {
-          if (!papers.length) return { x: 0, y: 0 };
-          let sx = 0, sy = 0; for (const p of papers) { sx += p.x; sy += p.y; }
-          return { x: sx / papers.length, y: sy / papers.length };
-        })();
+      let hoverIdx = null;
+      let hoverPaperData = null;
 
-        const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-        let maxD = 1; for (const p of papers) maxD = Math.max(maxD, dist(p, center));
-        const range = maxD * 1.1;
+      function watchPaper(p) {
+        if (!p) return;
 
-        // nearest paper by Euclidean distance to RI/center (data space)
-        let nearest = -1, best = Infinity;
-        for (let i = 0; i < papers.length; i++) {
-          const d = dist(papers[i], center);
-          if (d < best) { best = d; nearest = i; }
-        }
+        const pdfUrl = p.pdfUrl || p.pdf_url || p.pdfURL || null;
+        if (!pdfUrl) return;
 
-        // size scaling
-        const maxR = 12, minR = 3;
-        const rFor = (p) => maxR - Math.min(1, dist(p, center) / maxD) * (maxR - minR);
-
-        // paint levels (0..1)
-        const paint = new Float32Array(papers.length);
-
-        // animation params
-        const TWO_PI = Math.PI * 2;
-        const W = Math.PI / 6;     // sweep width
-        const SPEED = 1.8;         // rad/sec
-        const FADE = 2.2;          // level/sec
-
-        const norm = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
-        const inWedge = (a, s, e) => (s <= e) ? (a >= s && a <= e) : (a >= s || a <= e);
-        const anyPaint = () => { for (let i = 0; i < paint.length; i++) if (paint[i] > 0.001) return true; return false; };
-        const clamp01 = (x) => Math.max(0, Math.min(1, x));
-
-        let raf = null, last = 0;
-
-        const sweepPlugin = {
-          id: 'radarSweep',
-          afterDatasetsDraw(chart) {
-            if (!chart._radar) return;
-            const m = chart.getDatasetMeta(1);
-            if (!m?.data?.[0]) return;
-
-            const ctx = chart.ctx, a = chart.chartArea;
-            const { x: cx, y: cy } = m.data[0].getProps(['x', 'y'], true);
-            const R = Math.max(cx - a.left, a.right - cx, cy - a.top, a.bottom - cy);
-            const s = chart._ang || 0, e = s + W;
-
-            ctx.save();
-            ctx.beginPath(); ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top); ctx.clip();
-
-            const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
-            g.addColorStop(0, 'rgba(0,255,102,0.25)');
-            g.addColorStop(1, 'rgba(0,255,102,0)');
-
-            ctx.globalAlpha = 0.6;
-            ctx.fillStyle = g;
-            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, R, s, e); ctx.closePath(); ctx.fill();
-
-            ctx.globalAlpha = 0.45;
-            ctx.strokeStyle = 'rgba(0,255,102,0.9)';
-            ctx.lineWidth = 2;
-            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(e) * R, cy + Math.sin(e) * R); ctx.stroke();
-
-            ctx.restore();
-          }
+        const payload = {
+          pdf_url: String(pdfUrl),
+          title: String(p.title || p.label || ""),
+          published: String(p.published || "")
         };
 
-        const paintPlugin = {
-          id: 'paintOverlay',
-          afterDatasetsDraw(chart) {
-            if (!anyPaint()) return;
-            const meta = chart.getDatasetMeta(0), pts = meta?.data || [];
-            if (!pts.length) return;
+        const body = JSON.stringify(payload);
 
-            const ctx = chart.ctx, a = chart.chartArea;
-            ctx.save();
-            ctx.beginPath(); ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top); ctx.clip();
+        if (navigator.sendBeacon) {
+          const blob = new Blob([body], { type: "application/json" });
+          navigator.sendBeacon("/watch_paper", blob);
+          return;
+        }
 
-            for (let i = 0; i < pts.length; i++) {
-              const lv = paint[i];
-              if (lv <= 0.001) continue;
+        fetch("/watch_paper", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          credentials: "same-origin",
+          keepalive: true
+        }).catch(() => {});
+      }
 
-              const { x, y } = pts[i].getProps(['x', 'y'], true);
-              const rad = (pts[i].options && typeof pts[i].options.radius === 'number') ? pts[i].options.radius : 4;
-              const isGold = (i === nearest);
-              const rgb = isGold ? '255,215,0' : '0,255,102';
+      // -----------------------------
+      // Concept cluster (D3)
+      // -----------------------------
+      const svgEl = document.getElementById('conceptSvg');
+      const hintEl = document.getElementById('conceptHint');
 
-              ctx.globalAlpha = 0.15 + 0.85 * clamp01(lv);
-              ctx.fillStyle = `rgb(${rgb})`;
-              ctx.beginPath(); ctx.arc(x, y, rad, 0, TWO_PI); ctx.fill();
+      // Style knobs
+      const CONCEPT_STYLE = {
+        rDefault: 32,
+        rHit: 36,
 
-              ctx.globalAlpha = 0.25 + 0.75 * clamp01(lv);
-              ctx.strokeStyle = `rgb(${rgb})`;
-              ctx.lineWidth = 2;
-              ctx.beginPath(); ctx.arc(x, y, rad + 0.5, 0, TWO_PI); ctx.stroke();
-            }
+        labelColor: '#ffffff',
+        labelSizePx: 10,
 
-            ctx.restore();
-          }
-        };
+        fillDefault: 'rgba(150,215,255,0.95)',
+        fillHit: 'rgba(222, 142, 22, 0.95)',
+        strokeDefault: 'rgba(0,90,140,0)',
+        strokeHit: 'rgba(160,120,0,0)',
+        strokeWidth: 2
+      };
 
-        const chart = new Chart(el, {
-          type: 'scatter',
-          data: {
-            datasets: [
-              { label: 'Papers', data: papers, pointRadius: (c) => rFor(c.raw), pointHoverRadius: (c) => rFor(c.raw) + 2, pointBorderWidth: 1 },
-              { label: 'Research Interest', data: ri, pointRadius: 14, pointHoverRadius: 18 }
-            ]
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'nearest', intersect: true },
-            scales: {
-              x: { min: center.x - range, max: center.x + range, grid: { display: false } },
-              y: { min: center.y - range, max: center.y + range, grid: { display: false } }
-            },
-            onHover: (evt, els) => {
-              const c = evt?.chart?.canvas; if (!c) return;
-              const h = els?.[0];
-              const ds = h?.datasetIndex;
-              const idx = h?.index;
+      let conceptSvg = null;
+      let simulation = null;
 
-              // cursor
-              c.style.cursor = (ds === 0) ? 'pointer' : 'default';
+      function splitTwoLines(name, maxChars = 14) {
+        const s = String(name || '').trim();
+        if (!s) return [''];
+        if (s.length <= maxChars) return [s];
 
-              // Hovered Paper sticks: only update when hovering a *paper* point
-              if (ds === 0 && Number.isInteger(idx) && papers[idx]) {
-                if (hoverIdx !== idx) {
-                  hoverIdx = idx;
-                  renderHover(papers[idx]);
-                }
-              }
+        const words = s.split(/\s+/);
+        let line1 = '';
+        let i = 0;
 
-              // keep your existing RI radar behavior
-              const want = (ds === 1) && ri.length;
-              if (want) { chart._radar = true; chart._ang = chart._ang || 0; run(); }
-              else if (chart._radar) { chart._radar = false; run(); }
-            },
-            onClick: (evt, els) => {
-              if (!els?.length) return;
-              const e = els[0];
-              const d = evt.chart.data.datasets[e.datasetIndex].data[e.index];
-              if (d?.pdfUrl) window.open(d.pdfUrl, '_blank');
-            },
-            plugins: { tooltip: { callbacks: { label: (c) => c.raw.label } } }
-          },
-          plugins: [sweepPlugin, paintPlugin]
+        while (i < words.length) {
+          const next = line1 ? `${line1} ${words[i]}` : words[i];
+          if (next.length > maxChars) break;
+          line1 = next;
+          i++;
+        }
+
+        if (!line1) {
+          const a = s.slice(0, maxChars);
+          const b = s.slice(maxChars, maxChars * 2);
+          return [a, b + (s.length > maxChars * 2 ? '…' : '')];
+        }
+
+        const rest = words.slice(i).join(' ');
+        if (!rest) return [line1];
+
+        const line2 = rest.length > maxChars ? rest.slice(0, maxChars - 1) + '…' : rest;
+        return [line1, line2];
+      }
+
+      function renderConceptCluster(concepts) {
+        if (!svgEl || typeof d3 === 'undefined') return;
+
+        const list = Array.isArray(concepts) ? concepts : [];
+
+        if (simulation) {
+          simulation.stop();
+          simulation = null;
+        }
+
+        if (!list.length) {
+          svgEl.innerHTML = '';
+          if (hintEl) hintEl.classList.remove('d-none');
+          return;
+        }
+        if (hintEl) hintEl.classList.add('d-none');
+
+        const rect = svgEl.getBoundingClientRect();
+        const W = Math.max(320, rect.width || 320);
+        const H = 220;
+
+        svgEl.innerHTML = '';
+        conceptSvg = d3.select(svgEl).attr('viewBox', `0 0 ${W} ${H}`);
+
+        const nodes = list.map((name) => {
+          const t = String(name);
+          const hit = isHitConcept(t);
+          return { name: t, hit, r: hit ? CONCEPT_STYLE.rHit : CONCEPT_STYLE.rDefault };
         });
 
-        function run() {
-          if (raf) return;
-          last = 0;
-          raf = requestAnimationFrame(step);
+        const g = conceptSvg.append('g');
+
+        const circles = g.selectAll('circle')
+          .data(nodes)
+          .enter()
+          .append('circle')
+          .attr('r', d => d.r)
+          .attr('stroke-width', CONCEPT_STYLE.strokeWidth)
+          .attr('stroke', d => d.hit ? CONCEPT_STYLE.strokeHit : CONCEPT_STYLE.strokeDefault)
+          .attr('fill', d => d.hit ? CONCEPT_STYLE.fillHit : CONCEPT_STYLE.fillDefault);
+
+        circles.append('title').text(d => d.name);
+
+        const labels = g.selectAll('text')
+          .data(nodes)
+          .enter()
+          .append('text')
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'middle')
+          .style('font-size', `${CONCEPT_STYLE.labelSizePx}px`)
+          .style('fill', CONCEPT_STYLE.labelColor)
+          .style('font-weight', '700')
+          .style('font-family', 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial')
+          .style('pointer-events', 'none')
+          .style('user-select', 'none')
+          .each(function(d) {
+            const lines = splitTwoLines(d.name, 14);
+            const text = d3.select(this);
+            text.text(null);
+
+            if (lines.length === 1) {
+              text.append('tspan')
+                .attr('x', 0)
+                .attr('dy', '0em')
+                .text(lines[0]);
+              return;
+            }
+
+            // 2 lines, centered vertically
+            text.append('tspan')
+              .attr('x', 0)
+              .attr('dy', '-0.35em')
+              .text(lines[0]);
+
+            text.append('tspan')
+              .attr('x', 0)
+              .attr('dy', '1.05em')
+              .text(lines[1]);
+          });
+
+
+        simulation = d3.forceSimulation(nodes)
+          .force('charge', d3.forceManyBody().strength(10))
+          .force('center', d3.forceCenter(W / 2, H / 2))
+          .force('collide', d3.forceCollide().radius(d => d.r + 4).iterations(3))
+          .force('x', d3.forceX(W / 2).strength(0.04))
+          .force('y', d3.forceY(H / 2).strength(0.13))
+          .on('tick', () => {
+            for (const n of nodes) {
+              const pad = n.r + 2;
+              if (typeof n.x === 'number') n.x = Math.max(pad, Math.min(W - pad, n.x));
+              if (typeof n.y === 'number') n.y = Math.max(pad, Math.min(H - pad, n.y));
+            }
+            circles.attr('cx', d => d.x).attr('cy', d => d.y);
+            labels.attr('transform', d => `translate(${d.x},${d.y})`);
+          });
+
+        circles
+          .on('mouseenter', () => {
+            nodes.forEach(n => {
+              n.vx += (Math.random() - 0.5) * 10;
+              n.vy += (Math.random() - 0.5) * 6;
+            });
+            simulation.alpha(0.8).restart();
+          })
+          .on('mouseleave', () => {
+            simulation.alpha(0.25).restart();
+          });
+      }
+
+      // Render a concept map into ANY svg (used by accordion mini-maps)
+      function renderConceptClusterInto(svgNode, concepts, styleOverride = {}) {
+        if (!svgNode || typeof d3 === 'undefined') return;
+
+        const STYLE = { ...CONCEPT_STYLE, ...styleOverride };
+        const list = Array.isArray(concepts) ? concepts : [];
+
+        if (svgNode.__sim) {
+          svgNode.__sim.stop();
+          svgNode.__sim = null;
         }
 
-        function step(ts) {
-          if (!last) last = ts;
-          const dt = Math.min(0.05, (ts - last) / 1000);
-          last = ts;
+        if (!list.length) {
+          svgNode.innerHTML = '';
+          return;
+        }
 
-          // fade all
-          for (let i = 0; i < paint.length; i++) paint[i] = Math.max(0, paint[i] - FADE * dt);
+        const rect = svgNode.getBoundingClientRect();
+        const W = Math.max(240, rect.width || 240);
+        const H = Number(svgNode.getAttribute('height')) || 180;
 
-          // advance + hit-test while radar on
-          if (chart._radar) {
-            chart._ang = norm((chart._ang || 0) + SPEED * dt);
+        svgNode.innerHTML = '';
+        const svg = d3.select(svgNode).attr('viewBox', `0 0 ${W} ${H}`);
 
-            const mRI = chart.getDatasetMeta(1), mP = chart.getDatasetMeta(0);
-            if (mRI?.data?.[0] && mP?.data?.length) {
-              const { x: cx, y: cy } = mRI.data[0].getProps(['x', 'y'], true);
-              const s = norm(chart._ang), e = norm(chart._ang + W);
+        const nodes = list.map((name) => {
+          const t = String(name);
+          const hit = isHitConcept(t);
+          return { name: t, hit, r: hit ? STYLE.rHit : STYLE.rDefault };
+        });
 
-              for (let i = 0; i < mP.data.length; i++) {
-                const { x, y } = mP.data[i].getProps(['x', 'y'], true);
-                const a = norm(Math.atan2(y - cy, x - cx));
-                if (inWedge(a, s, e)) paint[i] = 1;
-              }
+        const g = svg.append('g');
+
+        const circles = g.selectAll('circle')
+          .data(nodes)
+          .enter()
+          .append('circle')
+          .attr('r', d => d.r)
+          .attr('stroke-width', STYLE.strokeWidth)
+          .attr('stroke', d => d.hit ? STYLE.strokeHit : STYLE.strokeDefault)
+          .attr('fill', d => d.hit ? STYLE.fillHit : STYLE.fillDefault);
+
+        circles.append('title').text(d => d.name);
+
+        const labels = g.selectAll('text')
+          .data(nodes)
+          .enter()
+          .append('text')
+          .attr('text-anchor', 'middle')
+          .attr('dominant-baseline', 'middle')
+          .style('font-size', `${CONCEPT_STYLE.labelSizePx}px`)
+          .style('fill', CONCEPT_STYLE.labelColor)
+          .style('font-weight', '700')
+          .style('font-family', 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial')
+          .style('pointer-events', 'none')
+          .style('user-select', 'none')
+          .each(function(d) {
+            const lines = splitTwoLines(d.name, 14);
+            const text = d3.select(this);
+            text.text(null);
+
+            if (lines.length === 1) {
+              text.append('tspan')
+                .attr('x', 0)
+                .attr('dy', '0em')
+                .text(lines[0]);
+              return;
             }
+
+            // 2 lines, centered vertically
+            text.append('tspan')
+              .attr('x', 0)
+              .attr('dy', '-0.35em')
+              .text(lines[0]);
+
+            text.append('tspan')
+              .attr('x', 0)
+              .attr('dy', '1.05em')
+              .text(lines[1]);
+          });
+
+        const sim = d3.forceSimulation(nodes)
+          .force('charge', d3.forceManyBody().strength(10))
+          .force('center', d3.forceCenter(W / 2, H / 2))
+          .force('collide', d3.forceCollide().radius(d => d.r + 4).iterations(3))
+          .force('x', d3.forceX(W / 2).strength(0.04))
+          .force('y', d3.forceY(H / 2).strength(0.13))
+          .on('tick', () => {
+            for (const n of nodes) {
+              const pad = n.r + 2;
+              if (typeof n.x === 'number') n.x = Math.max(pad, Math.min(W - pad, n.x));
+              if (typeof n.y === 'number') n.y = Math.max(pad, Math.min(H - pad, n.y));
+            }
+            circles.attr('cx', d => d.x).attr('cy', d => d.y);
+            labels.attr('transform', d => `translate(${d.x},${d.y})`);
+          });
+
+        svgNode.__sim = sim;
+
+        circles
+          .on('mouseenter', () => {
+            nodes.forEach(n => {
+              n.vx += (Math.random() - 0.5) * 10;
+              n.vy += (Math.random() - 0.5) * 6;
+            });
+            sim.alpha(0.8).restart();
+          })
+          .on('mouseleave', () => {
+            sim.alpha(0.25).restart();
+          });
+      }
+
+      function renderHover(p) {
+        if (!hoverTitle) return;
+
+        if (!p) {
+          hoverTitle.textContent = 'Hover a paper dot to see details';
+          renderConceptCluster([]);
+
+          if (hoverPublished) hoverPublished.textContent = '';
+          if (hoverAuthors) hoverAuthors.textContent = '';
+          if (hoverSummary) hoverSummary.textContent = '';
+
+          if (hoverPdf) {
+            hoverPdf.href = '#';
+            hoverPdf.classList.add('d-none');
           }
 
-          chart.draw();
-
-          if (chart._radar || anyPaint()) raf = requestAnimationFrame(step);
-          else { cancelAnimationFrame(raf); raf = null; last = 0; }
+          hoverPaperData = null;
+          return;
         }
+
+        hoverPaperData = p;
+
+        renderConceptCluster(p.concepts || []);
+
+        hoverTitle.textContent = p.label || p.title || '';
+        if (hoverPublished) hoverPublished.textContent = p.published ? `Published: ${p.published}` : '';
+        if (hoverAuthors) hoverAuthors.textContent = p.authors || '';
+        if (hoverSummary) hoverSummary.textContent = p.summary || '';
+
+        const url = p.pdfUrl || '#';
+        if (hoverPdf) {
+          hoverPdf.href = url;
+          if (p.pdfUrl) hoverPdf.classList.remove('d-none');
+          else hoverPdf.classList.add('d-none');
+        }
+      }
+
+      renderHover(null);
+
+      if (hoverPdf) {
+        hoverPdf.addEventListener("click", () => {
+          if (hoverPaperData) watchPaper(hoverPaperData);
+        });
+      }
+
+      // -----------------------------
+      // Radar chart (Chart.js)
+      // -----------------------------
+      const center = ri[0] ? { x: ri[0].x, y: ri[0].y } : (() => {
+        if (!papers.length) return { x: 0, y: 0 };
+        let sx = 0, sy = 0;
+        for (const p of papers) { sx += p.x; sy += p.y; }
+        return { x: sx / papers.length, y: sy / papers.length };
+      })();
+
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+      let maxD = 1;
+      for (const p of papers) maxD = Math.max(maxD, dist(p, center));
+      const range = maxD * 1.1;
+
+      let nearest = -1, best = Infinity;
+      for (let i = 0; i < papers.length; i++) {
+        const d = dist(papers[i], center);
+        if (d < best) { best = d; nearest = i; }
+      }
+
+      const maxR = 12, minR = 3;
+      const rFor = (p) => maxR - Math.min(1, dist(p, center) / maxD) * (maxR - minR);
+
+      const paint = new Float32Array(papers.length);
+
+      const TWO_PI = Math.PI * 2;
+      const WEDGE = Math.PI / 6;
+      const SPEED = 1.8;
+      const FADE = 2.2;
+
+      const normAng = (a) => ((a % TWO_PI) + TWO_PI) % TWO_PI;
+      const inWedge = (a, s, e) => (s <= e) ? (a >= s && a <= e) : (a >= s || a <= e);
+      const anyPaint = () => { for (let i = 0; i < paint.length; i++) if (paint[i] > 0.001) return true; return false; };
+      const clamp01 = (x) => Math.max(0, Math.min(1, x));
+
+      let raf = null, last = 0;
+
+      const sweepPlugin = {
+        id: 'radarSweep',
+        afterDatasetsDraw(chart) {
+          if (!chart._radar) return;
+          const m = chart.getDatasetMeta(1);
+          if (!m || !m.data || !m.data[0]) return;
+
+          const ctx = chart.ctx, a = chart.chartArea;
+          const { x: cx, y: cy } = m.data[0].getProps(['x', 'y'], true);
+          const R = Math.max(cx - a.left, a.right - cx, cy - a.top, a.bottom - cy);
+          const s = chart._ang || 0, e = s + WEDGE;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top);
+          ctx.clip();
+
+          const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+          g.addColorStop(0, 'rgba(0,255,102,0.25)');
+          g.addColorStop(1, 'rgba(0,255,102,0)');
+
+          ctx.globalAlpha = 0.6;
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, R, s, e);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.globalAlpha = 0.45;
+          ctx.strokeStyle = 'rgba(0,255,102,0.9)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(cx + Math.cos(e) * R, cy + Math.sin(e) * R);
+          ctx.stroke();
+
+          ctx.restore();
+        }
+      };
+
+      const paintPlugin = {
+        id: 'paintOverlay',
+        afterDatasetsDraw(chart) {
+          if (!anyPaint()) return;
+          const meta = chart.getDatasetMeta(0);
+          const pts = meta && meta.data ? meta.data : [];
+          if (!pts.length) return;
+
+          const ctx = chart.ctx, a = chart.chartArea;
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(a.left, a.top, a.right - a.left, a.bottom - a.top);
+          ctx.clip();
+
+          for (let i = 0; i < pts.length; i++) {
+            const lv = paint[i];
+            if (lv <= 0.001) continue;
+
+            const { x, y } = pts[i].getProps(['x', 'y'], true);
+            const rad = (pts[i].options && typeof pts[i].options.radius === 'number') ? pts[i].options.radius : 4;
+            const isGold = (i === nearest);
+            const rgb = isGold ? '255,215,0' : '0,255,102';
+
+            ctx.globalAlpha = 0.15 + 0.85 * clamp01(lv);
+            ctx.fillStyle = `rgb(${rgb})`;
+            ctx.beginPath();
+            ctx.arc(x, y, rad, 0, TWO_PI);
+            ctx.fill();
+
+            ctx.globalAlpha = 0.25 + 0.75 * clamp01(lv);
+            ctx.strokeStyle = `rgb(${rgb})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(x, y, rad + 0.5, 0, TWO_PI);
+            ctx.stroke();
+          }
+
+          ctx.restore();
+        }
+      };
+
+      const chart = new Chart(el, {
+        type: 'scatter',
+        data: {
+          datasets: [
+            {
+              label: 'Papers',
+              data: papers,
+              pointRadius: (c) => rFor(c.raw),
+              pointHoverRadius: (c) => rFor(c.raw) + 2,
+              pointBorderWidth: 1
+            },
+            { label: 'Research Interest', data: ri, pointRadius: 14, pointHoverRadius: 18 }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: 'nearest', intersect: true },
+          scales: {
+            x: { min: center.x - range, max: center.x + range, grid: { display: false } },
+            y: { min: center.y - range, max: center.y + range, grid: { display: false } }
+          },
+          onHover: (evt, els) => {
+            const canvas = evt && evt.chart && evt.chart.canvas ? evt.chart.canvas : null;
+            if (!canvas) return;
+
+            const h = els && els[0] ? els[0] : null;
+            const ds = h ? h.datasetIndex : null;
+            const idx = h ? h.index : null;
+
+            canvas.style.cursor = (ds === 0) ? 'pointer' : 'default';
+
+            if (ds === 0 && Number.isInteger(idx) && papers[idx]) {
+              if (hoverIdx !== idx) {
+                hoverIdx = idx;
+                renderHover(papers[idx]);
+              }
+            }
+
+            const want = (ds === 1) && ri.length;
+            if (want) { chart._radar = true; chart._ang = chart._ang || 0; run(); }
+            else if (chart._radar) { chart._radar = false; run(); }
+          },
+          onClick: (evt, els) => {
+            if (!els || !els.length) return;
+            const e = els[0];
+            const d = evt.chart.data.datasets[e.datasetIndex].data[e.index];
+            if (d && d.pdfUrl) {
+              watchPaper(d);
+              window.open(d.pdfUrl, '_blank');
+            }
+          },
+          plugins: {
+            tooltip: { callbacks: { label: (c) => (c && c.raw ? c.raw.label : '') } }
+          }
+        },
+        plugins: [sweepPlugin, paintPlugin]
       });
 
+      function run() {
+        if (raf) return;
+        last = 0;
+        raf = requestAnimationFrame(step);
+      }
+
+      function step(ts) {
+        if (!last) last = ts;
+        const dt = Math.min(0.05, (ts - last) / 1000);
+        last = ts;
+
+        for (let i = 0; i < paint.length; i++) paint[i] = Math.max(0, paint[i] - FADE * dt);
+
+        if (chart._radar) {
+          chart._ang = normAng((chart._ang || 0) + SPEED * dt);
+
+          const mRI = chart.getDatasetMeta(1);
+          const mP = chart.getDatasetMeta(0);
+
+          if (mRI && mRI.data && mRI.data[0] && mP && mP.data && mP.data.length) {
+            const pt = mRI.data[0].getProps(['x', 'y'], true);
+            const cx = pt.x, cy = pt.y;
+
+            const s = normAng(chart._ang);
+            const e = normAng(chart._ang + WEDGE);
+
+            for (let i = 0; i < mP.data.length; i++) {
+              const pxy = mP.data[i].getProps(['x', 'y'], true);
+              const a = normAng(Math.atan2(pxy.y - cy, pxy.x - cx));
+              if (inWedge(a, s, e)) paint[i] = 1;
+            }
+          }
+        }
+
+        chart.draw();
+
+        if (chart._radar || anyPaint()) raf = requestAnimationFrame(step);
+        else {
+          cancelAnimationFrame(raf);
+          raf = null;
+          last = 0;
+        }
+      }
+
+      // Accordion "Open PDF" click tracking
+      document.addEventListener("click", (e) => {
+        const a = e.target && e.target.closest ? e.target.closest("a.open-pdf") : null;
+        if (!a) return;
+
+        watchPaper({
+          pdfUrl: a.dataset.pdfUrl,
+          label: a.dataset.title,
+          published: a.dataset.published
+        });
+      });
+
+      // -----------------------------
+      // Mini concept maps inside accordion items
+      // -----------------------------
+      document.querySelectorAll('#papersAccordion .accordion-collapse').forEach((collapseEl) => {
+        collapseEl.addEventListener('shown.bs.collapse', () => {
+          const svg = collapseEl.querySelector('svg.concept-svg');
+          if (!svg) return;
+
+          let concepts = [];
+          try { concepts = JSON.parse(svg.dataset.concepts || '[]'); } catch {}
+
+          renderConceptClusterInto(svg, concepts, {
+            rDefault: 26,
+            rHit: 30,
+            labelSizePx: 9
+          });
+        });
+
+        collapseEl.addEventListener('hidden.bs.collapse', () => {
+          const svg = collapseEl.querySelector('svg.concept-svg');
+          if (svg && svg.__sim) {
+            svg.__sim.stop();
+            svg.__sim = null;
+          }
+        });
+      });
+    });

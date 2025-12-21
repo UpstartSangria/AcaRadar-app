@@ -45,18 +45,28 @@ script src="http://localhost:9292/faye/client.js"
         button type='submit' id='find-button' class="btn btn-primary w-100"
           span.spinner-grow.spinner-grow-sm.d-none role="status" aria-hidden="true"
           span.button-text Find
+          
   hr.my-4
   h4.mb-3.fw-bold Previously Viewed Papers
+
   - if watched_papers.any?
-    - watched_papers.each do |paper|
+    - watched_papers.each do |p|
+      - url = (p['pdf_url'] || p[:pdf_url]).to_s
+      - title = (p['title'] || p[:title]).to_s
+      - published = (p['published'] || p[:published]).to_s
+
       .card.bg-light.mb-3
         .card-body
           h5.card-title
-            a href=paper.origin_id target="_blank" rel="noopener noreferrer" = paper.title
-          p.small.text-muted
-            | Published on: #{paper.published}
-          p.card-text
-            = paper.summary
+            - if url.empty?
+              = title.empty? ? "Untitled paper" : title
+            - else
+              a href=url target="_blank" rel="noopener noreferrer" = (title.empty? ? url : title)
+
+          - unless published.empty?
+            p.small.text-muted
+              | Published on: #{published}
+
   - else
     .alert.alert-light role="alert"
       h4.alert-heading Welcome!
@@ -92,6 +102,7 @@ script src="http://localhost:9292/faye/client.js"
       const embedButton = document.getElementById('embed-button');
 
       let researchInterestVector = null;
+      let researchInterestRequestId = null;
 
       // Safety Check
       if (researchForm) {
@@ -144,12 +155,13 @@ script src="http://localhost:9292/faye/client.js"
             console.log("3. [Frontend] API Response received:", result);
 
             // --- C. GET REQUEST ID ---
-            // Based on your logs, the structure is inside result.data.request_id
             const requestId = data.request_id || null;
-            
+
             if (!requestId) {
               throw new Error("Response did not contain a request_id in result.data");
             }
+
+            researchInterestRequestId = requestId;
 
             if (data.status === 'completed' || data.cached) {
               researchInterestVector = data.vector_2d || null;
@@ -169,45 +181,55 @@ script src="http://localhost:9292/faye/client.js"
             console.log("4. [Frontend] Request ID obtained:", requestId);
             embedButton.querySelector('.button-text').innerText = "Processing...";
 
-            // --- D. SUBSCRIBE TO FAYE ---
-            // Ensure we point to port 9292
             if (!window.Faye) throw new Error("Faye client not loaded (window.Faye is undefined)");
             const client = new window.Faye.Client('http://localhost:9292/faye');
-            
+
             console.log(`5. [Faye] Subscribing to channel: /${requestId}`);
 
             const subscription = client.subscribe('/' + requestId, function(message) {
               console.log("6. [Faye] Message Received:", message);
 
-              // Expecting message format: { percent: 50, status: '...' }
-              if (progressBar && message.percent !== undefined) {
-                  const percentVal = message.percent;
-                  const messageText = message.message;
-                  progressBar.style.width = percentVal + '%';
-                  progressBar.setAttribute('aria-valuenow', percentVal);
-                  progressBar.innerText = `${percentVal}%: ${messageText}`;
+              const pct = (message && message.percent !== undefined) ? message.percent
+                        : (message && message.payload && message.payload.percent !== undefined) ? message.payload.percent
+                        : null;
+
+              const msgText = (message && message.message) ? message.message
+                            : (message && message.payload && message.payload.message) ? message.payload.message
+                            : '';
+
+              if (progressBar && pct !== null) {
+                progressBar.style.width = pct + '%';
+                progressBar.setAttribute('aria-valuenow', pct);
+                progressBar.innerText = `${pct}%: ${msgText || 'Processing...'}`;
               }
 
-              // Check for Completion
-              if (message.percent >= 100) {
-                  console.log("7. [Faye] Job Complete!");
+              const vec = (message && message.vector_2d) ||
+                          (message && message.payload && message.payload.vector_2d);
 
-                  if (message.vector_2d) {
-                  researchInterestVector = message.vector_2d;
-                  console.log("8. [Frontend] Vector stored:", researchInterestVector);
-                  }
-                  
-                  // Final UI Updates
-                  progressBar.classList.remove('progress-bar-animated'); // Stop animation
-                  embedButton.disabled = false;
-                  embedButton.querySelector('.button-text').innerText = "Done";
+              if (vec) {
+                researchInterestVector = vec;
+              }
+
+              const done = (message && (message.status === 'complete' || message.status === 'completed')) ||
+                          (message && message.payload && (message.payload.status === 'complete' || message.payload.status === 'completed')) ||
+                          (pct !== null && pct >= 100);
+
+              if (done) {
+                if (progressBar) {
+                  progressBar.style.width = '100%';
+                  progressBar.setAttribute('aria-valuenow', 100);
+                  progressBar.innerText = `100%: Done`;
+                  progressBar.classList.remove('progress-bar-animated');
+                }
+                embedButton.disabled = false;
+                embedButton.querySelector('.button-text').innerText = "Done";
               }
             });
-            
-            // Debugging Faye connection
+
             subscription.then(function() {
               console.log("5b. [Faye] Subscription active/successful.");
             });
+
 
           } catch (error) {
             console.error("!!! [Frontend] Error:", error);
@@ -254,12 +276,18 @@ script src="http://localhost:9292/faye/client.js"
               buttonText.textContent = '   Loading...';
 
               // --- D. Build the new URL with all the data ---
+              if (!researchInterestRequestId) {
+                alert("Research interest is still processing (no request_id). Please embed first.");
+                return;
+              }
+
               const params = new URLSearchParams({
-                  term: term,
-                  journal1: journal1,
-                  journal2: journal2,
-                  vector_x: researchInterestVector[0],
-                  vector_y: researchInterestVector[1]
+                term: term,
+                journal1: journal1,
+                journal2: journal2,
+                vector_x: researchInterestVector[0],
+                vector_y: researchInterestVector[1],
+                request_id: researchInterestRequestId
               });
 
               const newUrl = `/selected_journals?${params.toString()}`;

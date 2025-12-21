@@ -40,6 +40,10 @@ module AcaRadar
         Array(@entity.concepts).join(', ')
       end
 
+      def concepts
+        Array(@entity.concepts).map(&:to_s)
+      end
+
       # you don’t have a full embedding vector in this JSON; show 2D
       def short_embedding
         emb = two_dim_embedding
