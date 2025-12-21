@@ -85,7 +85,10 @@ module AcaRadar
 
     def api_request(method:, path:, json: nil, query: nil, headers: {})
       url = "#{API_BASE}#{path}"
-      url = "#{url}?#{URI.encode_www_form(query)}" if query && !query.empty?
+      if query && !query.empty?
+        q = normalize_query(query)
+        url = "#{url}?#{URI.encode_www_form(q)}"
+      end    
 
       h = { 'Accept' => 'application/json' }.merge(headers)
       h['Content-Type'] = 'application/json' if json
@@ -111,6 +114,24 @@ module AcaRadar
       dbg("api_request ERROR: #{e.class} - #{e.message}")
       raise
     end
+
+    def normalize_query(query)
+      return query if query.is_a?(Array) # already pairs
+    
+      pairs = []
+      query.each do |k, v|
+        key = k.to_s
+        if v.is_a?(Array)
+          array_key = key.end_with?('[]') ? key : "#{key}[]"
+          v.each { |vv| pairs << [array_key, vv] }
+        else
+          pairs << [key, v]
+        end
+      end
+      pairs
+    end
+    
+
 
     route do |routing|
       routing.assets
@@ -217,6 +238,20 @@ module AcaRadar
             path: '/api/v1/papers',
             query: routing.params
           )
+      
+          response.status = resp.code
+          resp.to_s
+        end
+
+        # Proxy: GET /api_proxy/journals -> API GET /api/v1/journals
+        routing.get 'journals' do
+          response['Content-Type'] = 'application/json'
+
+          resp = api_request(
+            method: :get,
+            path: '/api/v1/journals',
+            query: routing.params
+          )
 
           response.status = resp.code
           resp.to_s
@@ -258,19 +293,17 @@ module AcaRadar
       # -----------------------------
       routing.on 'selected_journals' do
         request_obj = Request::ListPapers.new(routing.params)
+        ri_job_id = routing.params['request_id'].to_s
+        ri_job_id = routing.params['ri_job_id'].to_s if ri_job_id.empty?
+        ri_job_id = routing.params['job_id'].to_s if ri_job_id.empty?
 
         research_interest_term = routing.params['term']
         vector_x = routing.params['vector_x']
         vector_y = routing.params['vector_y']
         research_interest_2d = vector_x && vector_y ? [vector_x.to_f, vector_y.to_f] : nil
 
-        ri_job_id = routing.params['request_id'].to_s.strip
-
-        dbg("GET /selected_journals: params_keys=#{routing.params.keys.sort.inspect}")
-        dbg("GET /selected_journals: request_id=#{ri_job_id.inspect} cookie_before=#{api_cookie_header.inspect}")
-
         unless request_obj.valid?
-          flash[:notice] = 'Please select 2 different journals.'
+          flash[:error] = request_obj.error_message || 'Invalid request'
           routing.redirect '/'
         end
 
@@ -310,7 +343,7 @@ module AcaRadar
         resp = api_request(
           method: :get,
           path: '/api/v1/papers',
-          query: routing.params
+          query: request_obj.to_query_params_pairs
         )
 
         dbg("GET /selected_journals: papers http=#{resp.code} cookie_after_papers=#{api_cookie_header.inspect}")
@@ -322,22 +355,39 @@ module AcaRadar
           routing.redirect '/'
         end
 
-        raw = safe_json_parse(resp.to_s)
+        raw = begin
+          safe_json_parse(resp.to_s)
+        rescue StandardError
+          {}
+        end
+
+        
         payload_hash = raw.is_a?(Hash) && raw.key?('data') ? raw['data'] : raw
         payload_json = payload_hash.to_json
 
-        papers_page =
-          Representer::PapersPageResponse.new(OpenStruct.new).from_json(payload_json)
+        papers_page = Representer::PapersPageResponse.new(OpenStruct.new).from_json(payload_json)
+
+        # Prefer API-provided RI values (these are correct in top_n mode)
+        research_interest_term =
+          payload_hash['research_interest_term'] || routing.params['term']
+
+        research_interest_2d =
+          normalize_vector_2d(payload_hash['research_interest_2d']) ||
+          begin
+            vx = routing.params['vector_x']
+            vy = routing.params['vector_y']
+            vx && vy ? [vx.to_f, vy.to_f] : nil
+          end
 
         response.expires 0, public: false
 
         view 'selected_journals',
              locals: {
-               journals: papers_page.journals || [],
+               journals: papers_page.journals || request_obj.journals || [],
                papers: Array(papers_page.papers&.data).map { |p| AcaRadar::View::Paper.new(p) },
                research_interest_term: research_interest_term,
                research_interest_2d: research_interest_2d,
-               research_interest_concepts: research_interest_concepts, # <-- now available to slim locals
+               research_interest_concepts: research_interest_concepts,
                pagination: papers_page.pagination || {},
                error: nil
              }
