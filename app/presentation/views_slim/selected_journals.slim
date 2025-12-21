@@ -121,8 +121,24 @@ html lang="en"
         })();
 
         const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-        let maxD = 1; for (const p of papers) maxD = Math.max(maxD, dist(p, center));
-        const range = maxD * 1.1;
+        let maxD = 0, maxDx = 0, maxDy = 0;
+        for (const p of papers) {
+          const dx = p.x - center.x, dy = p.y - center.y;
+          maxDx = Math.max(maxDx, Math.abs(dx));
+          maxDy = Math.max(maxDy, Math.abs(dy));
+          maxD  = Math.max(maxD, Math.hypot(dx, dy));
+        }
+        // include RI points too (harmless if center==RI)
+        for (const p of ri) {
+          const dx = p.x - center.x, dy = p.y - center.y;
+          maxDx = Math.max(maxDx, Math.abs(dx));
+          maxDy = Math.max(maxDy, Math.abs(dy));
+          maxD  = Math.max(maxD, Math.hypot(dx, dy));
+        }
+        const PAD_FRAC = 0.2; // "small padding"
+        const padX = maxDx * PAD_FRAC, padY = maxDy * PAD_FRAC;
+        const xMin = center.x - maxDx - padX, xMax = center.x + maxDx + padX;
+        const yMin = center.y - maxDy - padY, yMax = center.y + maxDy + padY;
 
         // nearest paper by Euclidean distance to RI/center (data space)
         let nearest = -1, best = Infinity;
@@ -132,8 +148,12 @@ html lang="en"
         }
 
         // size scaling
-        const maxR = 12, minR = 3;
-        const rFor = (p) => maxR - Math.min(1, dist(p, center) / maxD) * (maxR - minR);
+        const maxR = 15, minR = 3;
+        const SIZE_FALLOFF = 0.7; // < 1 => more aggressive drop
+        const rFor = (p) => {
+          const t = Math.pow(Math.min(1, dist(p, center) / maxD), SIZE_FALLOFF);
+          return maxR - t * (maxR - minR);
+        };
 
         // paint levels (0..1)
         const paint = new Float32Array(papers.length);
@@ -222,7 +242,7 @@ html lang="en"
           data: {
             datasets: [
               { label: 'Papers', data: papers, pointRadius: (c) => rFor(c.raw), pointHoverRadius: (c) => rFor(c.raw) + 2, pointBorderWidth: 1 },
-              { label: 'Research Interest', data: ri, pointRadius: 14, pointHoverRadius: 18 }
+              { label: (ri[0]?.label || 'Research Interest'), data: ri, pointRadius: 20, pointHoverRadius: 25 }
             ]
           },
           options: {
@@ -230,8 +250,8 @@ html lang="en"
             maintainAspectRatio: false,
             interaction: { mode: 'nearest', intersect: true },
             scales: {
-              x: { min: center.x - range, max: center.x + range, grid: { display: false } },
-              y: { min: center.y - range, max: center.y + range, grid: { display: false } }
+              x: { min: xMin, max: xMax, display: false, grid: { display: false } },
+              y: { min: yMin, max: yMax, display: false, grid: { display: false } }
             },
             onHover: (evt, els) => {
               const c = evt?.chart?.canvas; if (!c) return;
@@ -261,7 +281,14 @@ html lang="en"
               const d = evt.chart.data.datasets[e.datasetIndex].data[e.index];
               if (d?.pdfUrl) window.open(d.pdfUrl, '_blank');
             },
-            plugins: { tooltip: { callbacks: { label: (c) => c.raw.label } } }
+            plugins: {
+              legend: { display: true },
+              tooltip: {
+                // only show tooltips for paper points
+                filter: (ctx) => ctx.datasetIndex === 0,
+                callbacks: { label: (ctx) => ctx.raw.label }
+              }
+            }
           },
           plugins: [sweepPlugin, paintPlugin]
         });
@@ -303,4 +330,3 @@ html lang="en"
           else { cancelAnimationFrame(raf); raf = null; last = 0; }
         }
       });
-

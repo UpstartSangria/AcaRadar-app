@@ -1,5 +1,106 @@
 script src="http://localhost:9292/faye/client.js"
+
 .container-fluid
+
+style
+  | .journal-menu { position: relative; }
+  | #journals_menu_btn { cursor: pointer; }
+  |
+  | /* PANEL: will be portaled to <body> and positioned fixed by JS */
+  | .journal-menu-panel {
+  |   display: none;
+  |   position: fixed;      /* important for portal */
+  |   top: 0;
+  |   left: 0;
+  |   width: 280px;
+  |   z-index: 99999;
+  |   background: transparent;
+  |   padding: 0;
+  |   overflow: visible;     /* allow right submenus */
+  | }
+  |
+  | .journal-menu-panel.open { display: block; }
+  |
+  | /* Scroll only the first column */
+  | :root { --jmenu-w: 320px; --submenu-w: 360px; }
+  |
+  | .jmenu-root {
+  |   background: #f0f5fa;
+  |   border: 1px solid rgba(0,0,0,0.15);
+  |   border-radius: 6px;
+  |   box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+  |   padding: 6px;
+  |   overflow: visible;
+  |   width: var(--jmenu-w);
+  | }
+  |
+  | .jmenu-scroll {
+  |   max-height: 360px;
+  |   overflow: auto;
+  |   width: var(--jmenu-w);
+  |   position: relative;
+  | }
+  |
+  | ul.jmenu, ul.subMenu {
+  |   list-style: none;
+  |   margin: 0;
+  |   padding: 0;
+  | }
+  |
+  | li.jitem { position: relative; }
+  |
+  | .jrow {
+  |   display: flex;
+  |   align-items: center;
+  |   gap: 8px;
+  |   padding: 8px 10px;
+  |   border-radius: 6px;
+  |   cursor: default;
+  |   user-select: none;
+  |   background: #f0f5fa;
+  |   color: var(--bs-body-color);
+  |   width: 100%;          /* IMPORTANT: no fixed 520px */
+  | }
+  |
+  | .jrow:hover { background: #e0e5ea; }
+  |
+  | .jcheck { width: 16px; height: 16px; cursor: pointer; flex: 0 0 auto; }
+  |
+  | .jlabel {
+  |   flex: 1 1 auto;
+  |   min-width: 0;
+  |   font-size: 0.95rem;
+  |   white-space: normal;          /* wrap */
+  |   line-height: 1.2;
+  |   overflow-wrap: anywhere;
+  | }
+  |
+  | .arrow { flex: 0 0 auto; align-self: center; opacity: 0.75; }
+  |
+  | /* Submenus: positioned by JS */
+  | ul.subMenu {
+  |   display: none;
+  |   position: fixed;         /* positioned by JS */
+  |   top: 0;
+  |   left: 0;
+  |   width: var(--submenu-w);
+  |   max-width: var(--submenu-w);
+  |   background: #f0f5fa;
+  |   border: 1px solid rgba(0,0,0,0.15);
+  |   border-radius: 6px;
+  |   box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  |   padding: 6px;
+  |   max-height: 360px;
+  |   overflow: auto;
+  |   z-index: 100000;
+  | }
+  |
+  | li.folder > ul.subMenu { display: none; }
+  | li.folder.subopen > ul.subMenu { display: block; }
+  |
+  | /* Make submenu items readable on dark background */
+  | ul.subMenu .jrow { background: #f0f5fa; color: var(--bs-body-color); }
+  | ul.subMenu .jrow:hover { background: #e0e5ea; }
 
   / ===== Flash / Error Area =====
   - if flash[:error]
@@ -28,7 +129,7 @@ script src="http://localhost:9292/faye/client.js"
           span.spinner-grow.spinner-grow-sm.d-none role="status" aria-hidden="true"
           span.button-text Embed
 
-    hr.my-4
+  hr.my-4
   form role="form" action="/selected_journals" method='GET' id='find-journals-form'
     input type="hidden" name="request_id" id="request_id"
 
@@ -38,17 +139,19 @@ script src="http://localhost:9292/faye/client.js"
 
       .col-md-4
         label.form-label.fw-bold.mb-1 Journals
-        select name='journals[]' id='journals_select' class="form-control" multiple=true size="8"
-          - AcaRadar::View::JournalOption.all.each do |text, value|
-            option value=value = text
-        .form-text Select 1+ journals (Cmd/Ctrl+Click for multi-select)
+
+        .journal-menu
+          button#journals_menu_btn.form-control.text-start type="button"
+            | Select journals...
+          / IMPORTANT: panel exists here initially but will be portaled to <body> on open
+          .journal-menu-panel#journals_menu_panel
+            .text-muted.small#journals_menu_loading Loading journals...
+
+        .form-text Select 1 or more journals from domains/subdomains
 
       .col-md-2
-        label.form-label.fw-bold.mb-1 Top N
+        label.form-label.fw-bold.mb-1 Number of Results
         input.form-control type="number" name="top_n" id="top_n" min="1" max="200" placeholder="e.g. 25"
-        .form-text
-          | Leave blank for paged mode
-
 
       .col-md-2
         label.form-label.fw-bold.mb-1 From
@@ -81,228 +184,510 @@ script src="http://localhost:9292/faye/client.js"
       h4.alert-heading Welcome!
       p You haven't viewed any papers yet. Use the form above to find some interesting research papers.
 
-  javascript:
-    const API_HOST = "#{@api_host}";
-    console.log("0. [Frontend] API defined:", API_HOST);
-    document.addEventListener("DOMContentLoaded", function() {
+javascript:
+  const API_HOST = "#{@api_host}";
+  console.log("0. [Frontend] API defined:", API_HOST);
 
-      const flashArea = document.getElementById('flash-area');
-      const flashText = document.getElementById('flash-text');
+  document.addEventListener("DOMContentLoaded", function() {
 
-      function showFlash(type, msg) {
-        if (!flashArea || !flashText) return;
-        flashArea.classList.remove('d-none', 'alert-danger', 'alert-success', 'alert-warning', 'alert-info');
-        flashArea.classList.add(type); // e.g. 'alert-danger'
-        flashText.textContent = msg || 'Something went wrong.';
-      }
+    const flashArea = document.getElementById('flash-area');
+    const flashText = document.getElementById('flash-text');
 
-      function clearFlash() {
-        if (!flashArea || !flashText) return;
-        flashText.textContent = '';
-        flashArea.classList.add('d-none');
-      }
+    function showFlash(type, msg) {
+      if (!flashArea || !flashText) return;
+      flashArea.classList.remove('d-none', 'alert-danger', 'alert-success', 'alert-warning', 'alert-info');
+      flashArea.classList.add(type);
+      flashText.textContent = msg || 'Something went wrong.';
+    }
 
-      // ==========================================
-      // 1. Research Interest Form (AJAX + Faye)
-      // ==========================================
-      const researchForm = document.getElementById('research-interest-form');
-      const progressBarContainer = document.getElementById('search-progress');
-      const progressBar = progressBarContainer ? progressBarContainer.querySelector('.progress-bar') : null;
-      const embedButton = document.getElementById('embed-button');
+    function clearFlash() {
+      if (!flashArea || !flashText) return;
+      flashText.textContent = '';
+      flashArea.classList.add('d-none');
+    }
 
-      let researchInterestVector = null;
-      let researchRequestId = null;
-      let researchInterestRequestId = null;
+    // ==========================================
+    // 1. Research Interest Form (AJAX + Faye)
+    // ==========================================
+    const researchForm = document.getElementById('research-interest-form');
+    const progressBarContainer = document.getElementById('search-progress');
+    const progressBar = progressBarContainer ? progressBarContainer.querySelector('.progress-bar') : null;
+    const embedButton = document.getElementById('embed-button');
 
-      // Safety Check
-      if (researchForm) {
-        researchForm.addEventListener('submit', async function(e) {
-          e.preventDefault(); // Stop page reload
+    let researchInterestVector = null;
+    let researchRequestId = null;
+    let researchInterestRequestId = null;
 
-          const termInput = document.getElementById('research_interest_input').value;
-          console.log("1. [Frontend] Form submitted. Term:", termInput);
+    if (researchForm) {
+      researchForm.addEventListener('submit', async function(e) {
+        e.preventDefault();
 
-          // --- A. RESET UI ---
-          embedButton.disabled = true;
-          embedButton.querySelector('.button-text').innerText = "Starting...";
-          clearFlash();
-          
-          // Reset and show progress bar
-          progressBarContainer.classList.remove('d-none');
-          if(progressBar) {
-              progressBar.style.width = '0%';
-              progressBar.setAttribute('aria-valuenow', 0);
-              progressBar.innerText = '0%';
-              progressBar.classList.add('progress-bar-animated'); // Start animation
+        const termInput = document.getElementById('research_interest_input').value;
+        console.log("1. [Frontend] Form submitted. Term:", termInput);
+
+        embedButton.disabled = true;
+        embedButton.querySelector('.button-text').innerText = "Starting...";
+        clearFlash();
+
+        progressBarContainer.classList.remove('d-none');
+        if(progressBar) {
+          progressBar.style.width = '0%';
+          progressBar.setAttribute('aria-valuenow', 0);
+          progressBar.innerText = '0%';
+          progressBar.classList.add('progress-bar-animated');
+        }
+
+        try {
+          const response = await fetch('/api_proxy/research_interest', {
+            credentials: 'same-origin',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            body: JSON.stringify({ term: termInput })
+          });
+
+          const result = await response.json().catch(() => ({}));
+          const data = result.data || {};
+
+          if (!response.ok) {
+            const msg =
+              (data && (data.error || data.message)) ||
+              result.message ||
+              `Server Error: ${response.status} ${response.statusText}`;
+            throw new Error(msg);
           }
 
-          try {
-            // --- B. CALL API (Port 9292) ---
-            console.log("2. [Frontend] Sending POST request to ${API_HOST}...");
-            
-            const response = await fetch('/api_proxy/research_interest', {
-              credentials: 'same-origin',
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'Accept': 'application/json' 
-              },
-              body: JSON.stringify({ term: termInput })
-            });
+          const requestId = data.request_id || null;
+          if (!requestId) throw new Error("Response did not contain a request_id in result.data");
 
-            const result = await response.json().catch(() => ({}));
-            const data = result.data || {};
+          researchRequestId = requestId;
+          const requestIdInput = document.getElementById('request_id');
+          if (requestIdInput) requestIdInput.value = requestId;
+          researchInterestRequestId = requestId;
 
-            if (!response.ok) {
-              // API returns message + data.error; prefer the friendliest
-              const msg =
-                (data && (data.error || data.message)) ||
-                result.message ||
-                `Server Error: ${response.status} ${response.statusText}`;
-              throw new Error(msg);
-            }
+          if (data.status === 'completed' || data.cached) {
+            researchInterestVector = data.vector_2d || null;
 
-            console.log("3. [Frontend] API Response received:", result);
-
-            // --- C. GET REQUEST ID ---
-            // Based on your logs, the structure is inside result.data.request_id
-            const requestId = data.request_id || null;
-
-            if (!requestId) {
-              throw new Error("Response did not contain a request_id in result.data");
-            }
-
-            // Make request_id available to the "Find" flow
-            researchRequestId = requestId;
-            const requestIdInput = document.getElementById('request_id');
-            if (requestIdInput) requestIdInput.value = requestId;
-
-            // Always store request_id so "Find" can use it
-            researchInterestRequestId = requestId;
-
-            if (data.status === 'completed' || data.cached) {
-              researchInterestVector = data.vector_2d || null;
-
-              if (progressBar) {
-                progressBar.style.width = '100%';
-                progressBar.setAttribute('aria-valuenow', 100);
-                progressBar.innerText = '100%: Cached';
-                progressBar.classList.remove('progress-bar-animated');
-              }
-
-              embedButton.disabled = false;
-              embedButton.querySelector('.button-text').innerText = "Done";
-              return;
-            }
-
-            console.log("4. [Frontend] Request ID obtained:", requestId);
-
-            embedButton.querySelector('.button-text').innerText = "Processing...";
-
-            // --- D. SUBSCRIBE TO FAYE ---
-            // Ensure we point to port 9292
-            if (!window.Faye) throw new Error("Faye client not loaded (window.Faye is undefined)");
-            const client = new window.Faye.Client('http://localhost:9292/faye');
-            
-            console.log(`5. [Faye] Subscribing to channel: /${requestId}`);
-
-            const subscription = client.subscribe('/' + requestId, function(message) {
-              console.log("6. [Faye] Message Received:", message);
-
-              // Expecting message format: { percent: 50, status: '...' }
-              if (progressBar && message.percent !== undefined) {
-                  const percentVal = message.percent;
-                  const messageText = message.message;
-                  progressBar.style.width = percentVal + '%';
-                  progressBar.setAttribute('aria-valuenow', percentVal);
-                  progressBar.innerText = `${percentVal}%: ${messageText}`;
-              }
-
-              // Check for Completion
-              if (message.percent >= 100) {
-                  console.log("7. [Faye] Job Complete!");
-
-                  if (message.vector_2d) {
-                  researchInterestVector = message.vector_2d;
-                  console.log("8. [Frontend] Vector stored:", researchInterestVector);
-                  }
-                  
-                  // Final UI Updates
-                  progressBar.classList.remove('progress-bar-animated'); // Stop animation
-                  embedButton.disabled = false;
-                  embedButton.querySelector('.button-text').innerText = "Done";
-              }
-            });
-            
-            // Debugging Faye connection
-            subscription.then(function() {
-              console.log("5b. [Faye] Subscription active/successful.");
-            });
-
-          } catch (error) {
-            console.error("!!! [Frontend] Error:", error);
-            showFlash('alert-danger', error.message);
-
-            // Reset button so user can try again
             if (progressBar) {
+              progressBar.style.width = '100%';
+              progressBar.setAttribute('aria-valuenow', 100);
+              progressBar.innerText = '100%: Cached';
               progressBar.classList.remove('progress-bar-animated');
             }
+
             embedButton.disabled = false;
-            embedButton.querySelector('.button-text').innerText = "Embed";
+            embedButton.querySelector('.button-text').innerText = "Done";
+            return;
           }
-        });
-      } else {
-        console.warn("Could not find element #research-interest-form");
-      }
 
-      // ==========================================
-      // 2. Find Journals Form (multi-select + filters)
-      // ==========================================
-      const journalsForm = document.getElementById('find-journals-form');
-      if (journalsForm) {
-        const findButton = document.getElementById('find-button');
+          embedButton.querySelector('.button-text').innerText = "Processing...";
 
-        if (findButton) {
-          findButton.addEventListener('click', function(e) {
-            e.preventDefault();
+          if (!window.Faye) throw new Error("Faye client not loaded (window.Faye is undefined)");
+          const client = new window.Faye.Client('http://localhost:9292/faye');
 
-            const term = (document.getElementById('research_interest_input')?.value || '').trim();
+          const subscription = client.subscribe('/' + requestId, function(message) {
+            console.log("[Faye] Message:", message);
 
-            const journalsSelect = document.getElementById('journals_select');
-            const selectedJournals = journalsSelect
-              ? Array.from(journalsSelect.selectedOptions).map(o => o.value).filter(Boolean)
-              : [];
-
-            const topN = (document.getElementById('top_n')?.value || '').trim();
-            const minDate = (document.getElementById('min_date')?.value || '').trim();
-            const maxDate = (document.getElementById('max_date')?.value || '').trim();
-
-            if (selectedJournals.length === 0) {
-              alert('Please select at least one journal.');
-              return;
+            if (progressBar && message.percent !== undefined) {
+              const percentVal = message.percent;
+              const messageText = message.message;
+              progressBar.style.width = percentVal + '%';
+              progressBar.setAttribute('aria-valuenow', percentVal);
+              progressBar.innerText = `${percentVal}%: ${messageText}`;
             }
 
-            // top_n requires a request_id (embedded research interest)
-            if (topN && !researchRequestId) {
-              alert("Please 'Embed' a research interest first (required for Top N).");
-              return;
+            if (message.percent >= 100) {
+              if (message.vector_2d) researchInterestVector = message.vector_2d;
+              if (progressBar) progressBar.classList.remove('progress-bar-animated');
+              embedButton.disabled = false;
+              embedButton.querySelector('.button-text').innerText = "Done";
             }
-
-            const params = new URLSearchParams();
-            if (term) params.set('term', term);
-
-            // IMPORTANT: keep brackets so Rack parses as array everywhere
-            selectedJournals.forEach(j => params.append('journals[]', j));
-
-            if (researchRequestId) params.set('request_id', researchRequestId);
-            if (topN) params.set('top_n', topN);
-            if (minDate) params.set('min_date', minDate);
-            if (maxDate) params.set('max_date', maxDate);
-
-            const newUrl = `/selected_journals?${params.toString()}`;
-            console.log('Redirecting to:', newUrl);
-            window.location.href = newUrl;
           });
+
+          subscription.then(function() {
+            console.log("[Faye] Subscription active.");
+          });
+
+        } catch (error) {
+          console.error("[Frontend] Error:", error);
+          showFlash('alert-danger', error.message);
+          if (progressBar) progressBar.classList.remove('progress-bar-animated');
+          embedButton.disabled = false;
+          embedButton.querySelector('.button-text').innerText = "Embed";
         }
+      });
+    }
+
+    // ==========================================
+    // 2. Journals cascading menu (portal + hover-right)
+    // ==========================================
+    const menuRoot = document.querySelector('.journal-menu');
+    const menuBtn = document.getElementById('journals_menu_btn');
+    const menuPanel = document.getElementById('journals_menu_panel');
+
+    let portalPlaceholder = null;
+    let isPortaled = false;
+    let hoverTimer = null;
+
+    function updateMenuButtonLabel() {
+      const selected = Array.from(document.querySelectorAll('input[name="journals[]"]:checked'));
+      if (!menuBtn) return;
+      if (selected.length === 0) menuBtn.textContent = 'Select journals...';
+      else if (selected.length === 1) menuBtn.textContent = '1 journal selected';
+      else menuBtn.textContent = `${selected.length} journals selected`;
+    }
+
+    function positionPanel() {
+      const rect = menuBtn.getBoundingClientRect();
+      menuPanel.style.top = `${rect.bottom}px`;
+      menuPanel.style.left = `${rect.left}px`;
+    }
+
+    function openMenu() {
+      if (!menuPanel || !menuBtn) return;
+
+      if (!portalPlaceholder) {
+        portalPlaceholder = document.createElement('span');
+        portalPlaceholder.style.display = 'none';
+        menuPanel.parentNode.insertBefore(portalPlaceholder, menuPanel);
       }
+
+      if (!isPortaled) {
+        document.body.appendChild(menuPanel);
+        isPortaled = true;
+      }
+
+      positionPanel();
+      menuPanel.classList.add('open');
+    }
+
+    function closeMenu() {
+      if (!menuPanel) return;
+      menuPanel.classList.remove('open');
+
+      if (isPortaled && portalPlaceholder && portalPlaceholder.parentNode) {
+        portalPlaceholder.parentNode.insertBefore(menuPanel, portalPlaceholder);
+        isPortaled = false;
+        menuPanel.style.top = '';
+        menuPanel.style.left = '';
+        menuPanel.style.width = '';
+      }
+    }
+
+    function normalizeArrayOrMap(x) {
+      if (!x) return [];
+      if (Array.isArray(x)) return x;
+      if (typeof x === 'object') return Object.values(x);
+      return [];
+    }
+
+    function refreshAllFolderCheckboxes(container = menuPanel) {
+      if (!container) return;
+
+      const folders = container.querySelectorAll('li.folder');
+
+      folders.forEach(li => {
+        const box = li.querySelector(':scope > .jrow > input.folder-check');
+        const subtree = li.querySelector(':scope > ul.subMenu');
+        if (!box || !subtree) return;
+
+        const journals = Array.from(subtree.querySelectorAll('input[name="journals[]"]'));
+
+        if (journals.length === 0) {
+          box.checked = false;
+          box.indeterminate = false;
+          return;
+        }
+
+        const checkedCount = journals.filter(cb => cb.checked).length;
+        box.checked = checkedCount === journals.length;
+        box.indeterminate = checkedCount > 0 && checkedCount < journals.length;
+      });
+    }
+
+    function syncFolderCheckbox(folderCb, submenu) {
+      const all = Array.from(submenu.querySelectorAll('input[name="journals[]"]'));
+      if (!all.length) {
+        folderCb.checked = false;
+        folderCb.indeterminate = false;
+        return;
+      }
+      const checkedCount = all.filter(x => x.checked).length;
+      folderCb.checked = checkedCount === all.length;
+      folderCb.indeterminate = checkedCount > 0 && checkedCount < all.length;
+    }
+
+    function positionSubmenu(li, submenu) {
+      if (!li || !submenu) return;
+
+      const row = li.querySelector(':scope > .jrow') || li;
+      const rect = row.getBoundingClientRect();
+
+      // Place submenu to the right of the hovered row
+      submenu.style.top = `${rect.top}px`;
+      submenu.style.left = `${rect.right - 2}px`; 
+
+      // Keep it on-screen vertically (basic clamp)
+      const maxTop = window.innerHeight - submenu.offsetHeight - 8;
+      const clampedTop = Math.max(8, Math.min(rect.top, maxTop));
+      submenu.style.top = `${clampedTop}px`;
+    }
+
+    function repositionVisibleSubmenus(container) {
+      if (!container) return;
+      const subs = container.querySelectorAll('ul.subMenu');
+      subs.forEach(ul => {
+        if (getComputedStyle(ul).display !== 'none') {
+          positionSubmenu(ul.parentElement, ul);
+        }
+      });
+    }
+    function buildMenuNode(node) {
+      const label = (node && (node.label || node.key)) ? String(node.label || node.key) : '(Unnamed)';
+      const journals = Array.isArray(node?.journals) ? node.journals : [];
+      const subs = normalizeArrayOrMap(node?.subdomains);
+
+      const li = document.createElement('li');
+      li.className = 'jitem';
+
+      const isFolder = subs.length > 0 || journals.length > 0;
+      if (isFolder) li.classList.add('folder');
+
+      const row = document.createElement('div');
+      row.className = 'jrow';
+
+      const folderCb = document.createElement('input');
+      folderCb.type = 'checkbox';
+      folderCb.className = 'jcheck folder-check';
+      folderCb.title = 'Toggle all journals in this folder';
+      row.appendChild(folderCb);
+
+      const text = document.createElement('span');
+      text.className = 'jlabel';
+      text.textContent = label;
+      row.appendChild(text);
+
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow';
+      arrow.textContent = '›';
+      row.appendChild(arrow);
+
+      li.appendChild(row);
+
+      const submenu = document.createElement('ul');
+      submenu.className = 'subMenu';
+
+      journals.forEach(j => {
+        const name = String(j || '').trim();
+        if (!name) return;
+
+        const jli = document.createElement('li');
+        jli.className = 'jitem';
+
+        const jrow = document.createElement('label');
+        jrow.className = 'jrow';
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.name = 'journals[]';
+        cb.value = name;
+        cb.className = 'jcheck';
+
+        cb.addEventListener('change', () => {
+          updateMenuButtonLabel();
+          refreshAllFolderCheckboxes();
+        });
+
+        const jtext = document.createElement('span');
+        jtext.className = 'jlabel';
+        jtext.textContent = name;
+
+        jrow.appendChild(cb);
+        jrow.appendChild(jtext);
+        jli.appendChild(jrow);
+        submenu.appendChild(jli);
+      });
+
+      subs.forEach(child => {
+        submenu.appendChild(buildMenuNode(child));
+      });
+
+      li.appendChild(submenu);
+      if (isFolder) attachSubmenuHover(li, submenu);
+
+      folderCb.addEventListener('change', () => {
+      const checked = folderCb.checked;
+
+      submenu.querySelectorAll('input[name="journals[]"]').forEach(cb => {
+        cb.checked = checked;
+      });
+
+      updateMenuButtonLabel();
+      refreshAllFolderCheckboxes();
     });
+
+      syncFolderCheckbox(folderCb, submenu);
+
+      return li;
+    }
+
+    function attachSubmenuHover(li, submenu) {
+      let t = null;
+
+      function open() {
+        clearTimeout(t);
+        li.classList.add('subopen');
+        // position AFTER it's display:block (otherwise offsetHeight can be 0)
+        requestAnimationFrame(() => positionSubmenu(li, submenu));
+      }
+
+      function closeLater() {
+        clearTimeout(t);
+        t = setTimeout(() => li.classList.remove('subopen'), 5); // more forgiving
+      }
+
+      li.addEventListener('mouseenter', open);
+      li.addEventListener('mouseleave', closeLater);
+
+      submenu.addEventListener('mouseenter', open);
+      submenu.addEventListener('mouseleave', closeLater);
+    }
+
+    async function loadJournalsMenu() {
+      if (!menuPanel) return;
+
+      menuPanel.innerHTML = `<div class="jmenu-root"><div class="jmenu-scroll text-muted small" id="journals_menu_loading">Loading journals...</div></div> `;
+
+      try {
+        const resp = await fetch('/api_proxy/journals', {
+          credentials: 'same-origin',
+          headers: { 'Accept': 'application/json' }
+        });
+
+        const json = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(json.message || `Failed (${resp.status})`);
+
+        const data = json.data || {};
+        const domainsRaw = data.domains || [];
+        const domains = Array.isArray(domainsRaw) ? domainsRaw : Object.values(domainsRaw);
+
+        if (!domains.length) {
+          menuPanel.innerHTML = '<div class="jmenu-root text-muted small">No journals available.</div>';
+          return;
+        }
+
+        const ul = document.createElement('ul');
+        ul.className = 'jmenu';
+        domains.forEach(d => ul.appendChild(buildMenuNode(d)));
+
+        menuPanel.innerHTML = '';
+
+        const root = document.createElement('div');
+        root.className = 'jmenu-root';
+
+        const scroll = document.createElement('div');
+        scroll.className = 'jmenu-scroll';
+
+        scroll.appendChild(ul);
+        root.appendChild(scroll);
+        menuPanel.appendChild(root);
+
+        const scroller = root.querySelector('.jmenu-scroll');
+        if (scroller) {
+          scroller.addEventListener('scroll', () => repositionVisibleSubmenus(root), { passive: true });
+        }
+
+        window.addEventListener('resize', () => {
+          if (menuPanel.classList.contains('open')) repositionVisibleSubmenus(root);
+        });
+        window.addEventListener('scroll', () => {
+          if (menuPanel.classList.contains('open')) repositionVisibleSubmenus(root);
+        }, true);
+
+        updateMenuButtonLabel();
+        refreshAllFolderCheckboxes();
+      } catch (err) {
+        console.error('[JournalsMenu] Failed:', err);
+        menuPanel.innerHTML = `<div class="jmenu-root text-danger small">Failed to load journals: ${err.message}</div>`;
+      }
+    }
+
+    loadJournalsMenu();
+
+    // Hover open/close with grace period
+    if (menuBtn && menuPanel) {
+      menuBtn.addEventListener('mouseenter', () => {
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(openMenu, 60);
+      });
+      menuBtn.addEventListener('mouseleave', () => {
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(closeMenu, 250);
+      });
+
+      menuPanel.addEventListener('mouseenter', () => {
+        clearTimeout(hoverTimer);
+      });
+      menuPanel.addEventListener('mouseleave', () => {
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(closeMenu, 250);
+      });
+
+      // click toggle also (trackpad friendly)
+      menuBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (menuPanel.classList.contains('open')) closeMenu();
+        else openMenu();
+      });
+
+      // close when clicking outside (but NOT inside panel)
+      document.addEventListener('click', (e) => {
+        if (menuBtn.contains(e.target)) return;
+        if (menuPanel.contains(e.target)) return;
+        closeMenu();
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeMenu();
+      });
+
+      window.addEventListener('scroll', () => {
+        if (menuPanel.classList.contains('open')) positionPanel();
+      }, true);
+
+      window.addEventListener('resize', () => {
+        if (menuPanel.classList.contains('open')) positionPanel();
+      });
+    }
+
+    // ==========================================
+    // 3. Find Journals validation
+    // ==========================================
+    const journalsForm = document.getElementById('find-journals-form');
+    if (journalsForm) {
+      journalsForm.addEventListener('submit', function(e) {
+        const selected = Array.from(document.querySelectorAll('input[name="journals[]"]:checked'))
+          .map(x => x.value)
+          .filter(Boolean);
+
+        const topN = (document.getElementById('top_n')?.value || '').trim();
+        const requestId = (document.getElementById('request_id')?.value || '').trim();
+
+        if (selected.length === 0) {
+          e.preventDefault();
+          alert('Please select at least one journal.');
+          return;
+        }
+
+        if (topN && !requestId) {
+          e.preventDefault();
+          alert("Top N requires an embedded research interest. Please click 'Embed' first.");
+          return;
+        }
+      });
+    }
+
+  });
