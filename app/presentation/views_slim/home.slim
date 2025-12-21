@@ -6,29 +6,25 @@ style
   | .journal-menu { position: relative; }
   | #journals_menu_btn { cursor: pointer; }
   |
-  | /* PANEL: will be portaled to <body> and positioned fixed by JS */
   | .journal-menu-panel {
   |   display: none;
-  |   position: fixed;      /* important for portal */
+  |   position: fixed;
   |   top: 0;
   |   left: 0;
   |   width: 280px;
   |   z-index: 99999;
   |   background: transparent;
   |   padding: 0;
-  |   overflow: visible;     /* allow right submenus */
+  |   overflow: visible;
   | }
   |
   | .journal-menu-panel.open { display: block; }
   |
-  | /* Scroll only the first column */
   | :root { --jmenu-w: 320px; --submenu-w: 360px; }
   |
   | .jmenu-root {
-  |   background: #f0f5fa;
-  |   border: 1px solid rgba(0,0,0,0.15);
+  |   background: transparent;
   |   border-radius: 6px;
-  |   box-shadow: 0 6px 18px rgba(0,0,0,0.08);
   |   padding: 6px;
   |   overflow: visible;
   |   width: var(--jmenu-w);
@@ -169,16 +165,25 @@ style
 
   hr.my-4
   h4.mb-3.fw-bold Previously Viewed Papers
+
   - if watched_papers.any?
-    - watched_papers.each do |paper|
+    - watched_papers.each do |p|
+      - url = (p['pdf_url'] || p[:pdf_url]).to_s
+      - title = (p['title'] || p[:title]).to_s
+      - published = (p['published'] || p[:published]).to_s
+
       .card.bg-light.mb-3
         .card-body
           h5.card-title
-            a href=paper.origin_id target="_blank" rel="noopener noreferrer" = paper.title
-          p.small.text-muted
-            | Published on: #{paper.published}
-          p.card-text
-            = paper.summary
+            - if url.empty?
+              = title.empty? ? "Untitled paper" : title
+            - else
+              a href=url target="_blank" rel="noopener noreferrer" = (title.empty? ? url : title)
+
+          - unless published.empty?
+            p.small.text-muted
+              | Published on: #{published}
+
   - else
     .alert.alert-light role="alert"
       h4.alert-heading Welcome!
@@ -284,31 +289,54 @@ javascript:
 
           embedButton.querySelector('.button-text').innerText = "Processing...";
 
-          if (!window.Faye) throw new Error("Faye client not loaded (window.Faye is undefined)");
-          const client = new window.Faye.Client('http://localhost:9292/faye');
+            if (!window.Faye) throw new Error("Faye client not loaded (window.Faye is undefined)");
+            const client = new window.Faye.Client('http://localhost:9292/faye');
+
+            console.log(`5. [Faye] Subscribing to channel: /${requestId}`);
 
           const subscription = client.subscribe('/' + requestId, function(message) {
             console.log("[Faye] Message:", message);
 
-            if (progressBar && message.percent !== undefined) {
-              const percentVal = message.percent;
-              const messageText = message.message;
-              progressBar.style.width = percentVal + '%';
-              progressBar.setAttribute('aria-valuenow', percentVal);
-              progressBar.innerText = `${percentVal}%: ${messageText}`;
-            }
+              const pct = (message && message.percent !== undefined) ? message.percent
+                        : (message && message.payload && message.payload.percent !== undefined) ? message.payload.percent
+                        : null;
 
-            if (message.percent >= 100) {
-              if (message.vector_2d) researchInterestVector = message.vector_2d;
-              if (progressBar) progressBar.classList.remove('progress-bar-animated');
-              embedButton.disabled = false;
-              embedButton.querySelector('.button-text').innerText = "Done";
-            }
-          });
+              const msgText = (message && message.message) ? message.message
+                            : (message && message.payload && message.payload.message) ? message.payload.message
+                            : '';
 
-          subscription.then(function() {
-            console.log("[Faye] Subscription active.");
-          });
+              if (progressBar && pct !== null) {
+                progressBar.style.width = pct + '%';
+                progressBar.setAttribute('aria-valuenow', pct);
+                progressBar.innerText = `${pct}%: ${msgText || 'Processing...'}`;
+              }
+
+              const vec = (message && message.vector_2d) ||
+                          (message && message.payload && message.payload.vector_2d);
+
+              if (vec) {
+                researchInterestVector = vec;
+              }
+
+              const done = (message && (message.status === 'complete' || message.status === 'completed')) ||
+                          (message && message.payload && (message.payload.status === 'complete' || message.payload.status === 'completed')) ||
+                          (pct !== null && pct >= 100);
+
+              if (done) {
+                if (progressBar) {
+                  progressBar.style.width = '100%';
+                  progressBar.setAttribute('aria-valuenow', 100);
+                  progressBar.innerText = `100%: Done`;
+                  progressBar.classList.remove('progress-bar-animated');
+                }
+                embedButton.disabled = false;
+                embedButton.querySelector('.button-text').innerText = "Done";
+              }
+            });
+
+            subscription.then(function() {
+              console.log("5b. [Faye] Subscription active/successful.");
+            });
 
         } catch (error) {
           console.error("[Frontend] Error:", error);
@@ -687,7 +715,28 @@ javascript:
           alert("Top N requires an embedded research interest. Please click 'Embed' first.");
           return;
         }
-      });
-    }
 
-  });
+        // --- C. Show loading state ---
+        const spinner = findButton.querySelector('.spinner-grow');
+        const buttonText = findButton.querySelector('.button-text');
+        findButton.disabled = true;
+        spinner.classList.remove('d-none');
+        buttonText.textContent = '   Loading...';
+
+        // --- D. Build the new URL with all the data ---
+        const params = new URLSearchParams({
+            term: term,
+            journal1: journal1,
+            journal2: journal2,
+            vector_x: researchInterestVector[0],
+            vector_y: researchInterestVector[1]
+        });
+
+        const newUrl = `/selected_journals?${params.toString()}`;
+        console.log("Redirecting to:", newUrl);
+
+        // --- E. Redirect the browser ---
+        window.location.href = newUrl;
+    });
+    }
+          });
